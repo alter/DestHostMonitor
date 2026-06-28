@@ -1,5 +1,8 @@
 # pingtrace
 
+<img width="921" height="251" alt="image" src="https://github.com/user-attachments/assets/fcc177dc-b72f-4f97-bf1f-572cde8467b6" />
+
+
 Continuous reachability prober for Windows. It probes a list of hosts (ICMP or
 TCP) around the clock, shows a live console dashboard, writes a compact
 zstd-compressed binary journal, detects outages, and localizes *where* the path
