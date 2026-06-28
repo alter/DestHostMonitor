@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <deque>
 #include <filesystem>
 #include <map>
 #include <string>
@@ -160,9 +161,17 @@ void writer_loop(BlockingQueue<ProbeSample>* samples, const Config* cfg,
     uint64_t cur_end  = seg.start_utc_ms() + seg_ms;
     uint64_t last_utc = seg.start_utc_ms();
 
-    struct Stat { uint64_t sent = 0, lost = 0; Status last = Status::Timeout; uint16_t rtt = kRttNa; };
+    // Sliding window over the LAST N probes per target (shifts by one each probe:
+    // 1..10, then 2..11, ...). Stores each probe's RTT (kRttNa = that probe
+    // failed), so loss and rtt min/mean/max all derive from the same window.
+    constexpr size_t kWindowProbes = 10;
+    struct Stat {
+        uint64_t             sent = 0, lost = 0;
+        Status               last = Status::Timeout;
+        uint16_t             rtt = kRttNa;  // last probe's rtt (kRttNa if it failed)
+        std::deque<uint16_t> win;           // last <=N rtts; kRttNa = failed probe
+    };
     std::map<uint16_t, Stat> stats;
-    std::map<uint16_t, std::pair<uint64_t, uint64_t>> base;  // window baseline (~10s ago)
 
     // Interactive console -> live in-place dashboard; piped/redirected -> append
     // blocks (clean in log files / under a service). PINGTRACE_TTY=1 forces the
@@ -189,7 +198,6 @@ void writer_loop(BlockingQueue<ProbeSample>* samples, const Config* cfg,
     int dash_lines = 0;  // lines drawn in the previous dashboard frame
 
     double last_render = mono_ms();
-    double last_window = mono_ms();
     double last_flush  = mono_ms();
     uint64_t since_flush = 0;
 
@@ -250,10 +258,16 @@ void writer_loop(BlockingQueue<ProbeSample>* samples, const Config* cfg,
         detector.add(s);
 
         auto& st = stats[s.target_id];
+        const bool failed = (s.result.status != Status::Ok);
         ++st.sent;
-        if (s.result.status != Status::Ok) ++st.lost;
+        if (failed) ++st.lost;
         st.last = s.result.status;
         st.rtt  = s.result.rtt_tenths_ms;
+
+        // Advance the sliding window: append this probe's rtt (kRttNa = failed),
+        // evicting the oldest once it holds N.
+        st.win.push_back(s.result.rtt_tenths_ms);
+        if (st.win.size() > kWindowProbes) st.win.pop_front();
 
         const double now = mono_ms();
         if (++since_flush >= 50 || now - last_flush >= 1500.0) {
@@ -282,45 +296,54 @@ void writer_loop(BlockingQueue<ProbeSample>* samples, const Config* cfg,
                             static_cast<unsigned long long>(total_probes));
                 ++lines;
             } else {
-                std::printf("\n==== %s UTC | window=last ~10s | tot=since start ====\n",
-                            format_utc_ms(now_utc_ms()).c_str());
+                std::printf("\n==== %s UTC | window=last %zu probes | tot=since start ====\n",
+                            format_utc_ms(now_utc_ms()).c_str(), kWindowProbes);
             }
-            std::printf("%s  %-16s %14s   %16s   %9s\n",
-                        eol, "target", "loss (10s)", "loss (total)", "last");
+            std::printf("%s  %-16s %12s %6s    %7s %7s %7s %9s\n",
+                        eol, "target", "loss(last10)", "total",
+                        "rtt min", "mean", "max", "last(ms)");
             ++lines;
 
             for (const auto& [id, st2] : stats) {
-                const auto& b = base[id];
-                const uint64_t w_sent = st2.sent - b.first;
-                const uint64_t w_lost = st2.lost - b.second;
+                // Loss + rtt min/mean/max over the sliding window (OK probes only).
+                uint64_t w_sent = st2.win.size(), w_lost = 0;
+                uint32_t rok = 0, rsum = 0, rmin = 0, rmax = 0;
+                for (uint16_t v : st2.win) {
+                    if (v == kRttNa) { ++w_lost; continue; }
+                    if (rok == 0 || v < rmin) rmin = v;
+                    if (rok == 0 || v > rmax) rmax = v;
+                    rsum += v;
+                    ++rok;
+                }
                 const double w_loss = w_sent ? 100.0 * w_lost / w_sent : 0.0;
                 const double c_loss = st2.sent ? 100.0 * st2.lost / st2.sent : 0.0;
 
-                char rtt[16];
-                if (st2.rtt == kRttNa) std::snprintf(rtt, sizeof(rtt), "%s", to_string(st2.last));
-                else std::snprintf(rtt, sizeof(rtt), "%.1fms", st2.rtt / 10.0);
+                char cmin[10], cmean[10], cmax[10], clast[12];
+                if (rok) {
+                    std::snprintf(cmin,  sizeof(cmin),  "%.1f", rmin / 10.0);
+                    std::snprintf(cmean, sizeof(cmean), "%.1f", (rsum / static_cast<double>(rok)) / 10.0);
+                    std::snprintf(cmax,  sizeof(cmax),  "%.1f", rmax / 10.0);
+                } else {
+                    std::snprintf(cmin, sizeof(cmin), "-");
+                    std::snprintf(cmean, sizeof(cmean), "-");
+                    std::snprintf(cmax, sizeof(cmax), "-");
+                }
+                if (st2.rtt == kRttNa) std::snprintf(clast, sizeof(clast), "%s", to_string(st2.last));
+                else std::snprintf(clast, sizeof(clast), "%.1f", st2.rtt / 10.0);
 
                 const char* color = (tty && w_loss > 0.0) ? "\x1b[31m" : "";
                 const char* reset = (tty && w_loss > 0.0) ? "\x1b[0m" : "";
-                std::printf("%s  %s%-16s %4llu/%-5llu %5.1f%%   %6llu/%-7llu %5.1f%%   %9s%s%s\n",
+                std::printf("%s  %s%-16s %3llu/%-3llu %5.1f%% %5.1f%%   %7s %7s %7s %9s%s%s\n",
                             eol, color, name_of[id].c_str(),
                             static_cast<unsigned long long>(w_lost),
-                            static_cast<unsigned long long>(w_sent), w_loss,
-                            static_cast<unsigned long long>(st2.lost),
-                            static_cast<unsigned long long>(st2.sent), c_loss,
-                            rtt, (w_loss > 0.0 ? "  <- loss" : ""), reset);
+                            static_cast<unsigned long long>(w_sent), w_loss, c_loss,
+                            cmin, cmean, cmax, clast,
+                            (w_loss > 0.0 ? "  <- loss" : ""), reset);
                 ++lines;
             }
             std::fflush(stdout);
             dash_lines = lines;
             last_render = now;
-
-            // Roll the window baseline every ~10s.
-            if (now - last_window >= 10000.0 || base.empty()) {
-                base.clear();
-                for (const auto& [id, st2] : stats) base[id] = {st2.sent, st2.lost};
-                last_window = now;
-            }
         }
     }
 
