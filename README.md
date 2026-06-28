@@ -1,45 +1,63 @@
 # pingtrace
 
-Continuous reachability prober for Windows. It pings/connects to a list of
-target hosts around the clock, writes a compact compressed binary journal,
-localizes outages via a static hop ladder plus a one-shot traceroute fired on
-each outage, and answers questions offline with its own subcommands.
+Continuous reachability prober for Windows. It probes a list of hosts (ICMP or
+TCP) around the clock, shows a live console dashboard, writes a compact
+zstd-compressed binary journal, detects outages, and localizes *where* the path
+breaks via a hop ladder plus a one-shot traceroute fired the moment an outage
+starts. All analysis is offline, over any past window, through its own
+subcommands.
+
+It is built for the "is it me, my ISP, or the far host?" question — e.g. keeping
+an eye on an exchange API, a VPN tunnel, or a remote server, and being able to
+say afterwards *when* it broke, *how long*, *how often*, and *at which hop*.
+
+## Highlights
+
+- **ICMP and TCP probing**, per-target interval/timeout, no admin rights needed.
+- **Live dashboard** that redraws in place with a sliding window of the last 10
+  probes per target: loss and RTT min/mean/max/last, losing rows flagged in red.
+- **Compact storage**: 12-byte raw records, hourly segments sealed with zstd
+  (~3x), plus per-minute rollups kept forever. ~10 hosts ≈ tens of MB/year.
+- **Outage detection** with classification: `host` (one target), `local` (all
+  targets down at once = your side), `monitor_gap` (the machine slept / clock
+  jumped).
+- **Localization**: `discover` builds a hop ladder; every outage triggers a
+  one-shot traceroute saved next to the event.
+- **Offline reports**: per-target summary, loss-by-hour-of-day, day×hour heatmap,
+  outage list, and raw CSV export for Excel / pandas / Grafana.
+- **Crash-safe**: a kill mid-write leaves at most ~1.5s of data unflushed; a
+  dangling segment is sealed automatically on the next start.
+
+## Requirements
+
+- Windows 10/11.
+- Visual Studio 2022/2026 (the bundled CMake + Ninja + vcpkg are enough — no
+  separate installs). Any MSVC + CMake + vcpkg toolchain also works.
 
 ## Build
 
-Requires Visual Studio 2026 (or any MSVC + CMake + vcpkg). From a Developer
-prompt at the repo root:
+**Easiest — `build.cmd`:** double-click it, or run it from any terminal. It
+finds Visual Studio via `vswhere`, sets up the MSVC environment, and builds with
+the bundled CMake/Ninja/vcpkg. The result is `build\pingtrace.exe` (with
+`zstd.dll` copied next to it).
+
+**Visual Studio:** `File → Open → Folder…` → the repo. VS reads `CMakeLists.txt`
++ `CMakePresets.json`, configures automatically, then `Build → Build All`.
+
+**Command line** (from a *Developer* PowerShell/Command Prompt for VS):
 
 ```
 cmake --preset default
 cmake --build --preset default
 ```
 
-The preset points CMake at the VS-bundled vcpkg toolchain and pulls
-`nlohmann-json` and `zstd`. The binary lands in `build/pingtrace.exe`.
+Dependencies (`nlohmann-json`, `zstd`) are pulled by vcpkg on the first build.
 
-## Quick start
+## Configuration
 
-```
-copy config.example.json config.json   # edit targets/storage dir
-build\pingtrace.exe run                 # Ctrl+C to stop
-build\pingtrace.exe analyze --from 7d --by-hour --heatmap
-```
-
-## Subcommands
-
-| Command | Purpose |
-|---|---|
-| `run [--config <path>]` | Continuous ICMP/TCP probing. `--duration <s>` for a bounded run. |
-| `discover <dest> [--add]` | Traceroute to `<dest>`; with `--add` append the responding hops as ladder targets (`path_group`/`hop_index`). |
-| `analyze [--from --to --target --by-hour --heatmap]` | Per-target summary, outage list, loss-by-hour-of-day, day×hour heatmap. |
-| `export --from [--to] [--target] [--out f.csv]` | Dump raw records in a window to CSV. |
-| `verify` | Seal dangling `.part` files and rebuild the segment index. |
-
-Time arguments accept `YYYY-MM-DD[ HH:MM[:SS]]` (local, DST-aware), a relative
-`<N>d|h|m` ("that long ago"), or `now`.
-
-## Config (`config.example.json`)
+`run`, `analyze`, `export`, `verify`, and `discover` read a JSON config
+(default `config.json`; override with `--config <path>`). Start from
+`config.example.json`:
 
 ```json
 {
@@ -54,14 +72,194 @@ Time arguments accept `YYYY-MM-DD[ HH:MM[:SS]]` (local, DST-aware), a relative
 }
 ```
 
+| Section | Field | Meaning |
+|---|---|---|
+| `storage` | `dir` | Where data is written (created if missing). |
+| | `segment_minutes` | Raw segment length before sealing (default 60). |
+| | `raw_retention_days` | Delete sealed raw segments older than this (default 14). Rollups/events/traces are kept forever. |
+| `defaults` | `interval_ms` / `timeout_ms` | Defaults applied to targets that don't set their own. |
+| `events` | `fail_threshold` | Consecutive failures before an outage opens (default 3). |
+| | `min_outage_ms` | Minimum duration to actually log an outage (filters blips). |
+| | `trigger_traceroute` | Run a traceroute when an outage opens. |
+| `targets[]` | `name` | Label shown everywhere (defaults to `address`). |
+| | `address` | Hostname or IPv4. |
+| | `proto` | `icmp` or `tcp`. |
+| | `port` | Required for `tcp`. |
+| | `interval_ms` / `timeout_ms` | Optional per-target overrides. |
+| | `path_group` / `hop_index` | Tag a target as a rung of a path's ladder (set by `discover --add`). |
+
+TCP probes connect and measure time to SYN-ACK (open) or RST (closed) — both
+mean the host responded. Useful when routers deprioritize ICMP: probe the real
+service port instead.
+
+## Quick start
+
+```
+copy config.example.json config.json      :: then edit targets + storage dir
+build\pingtrace.exe run                    :: live dashboard; Ctrl+C to stop
+build\pingtrace.exe analyze --from 7d --by-hour --heatmap
+```
+
+## `run` — continuous probing
+
+```
+pingtrace run [--config <path>] [--duration <seconds>]
+```
+
+In an interactive terminal you get a **live dashboard** that updates in place:
+
+```
+pingtrace live - in-place; history on disk (C:/pingtrace/data); Ctrl+C to stop
+pingtrace live   2026-06-28 17:35:22.308 UTC   uptime 00:02:39   probes 1436
+  target           loss(last10) total    rtt min   mean    max  last(ms)
+  home-router       0/10  0.0%  0.0%        1.0    5.4    41.0     7.0
+  selectel          0/10  0.0%  0.0%        5.0    9.7    46.0     8.0
+  hk                3/10 30.0%  0.6%      234.0  256.6   466.0   237.0  <- loss
+  cloudflare        0/10  0.0%  0.0%       52.0   55.9    61.0    59.0
+```
+
+- `loss(last10)` — failures / probes over a **sliding window of the last 10
+  probes** per target (1‑10, then 2‑11, …), plus that window's loss %.
+- `total` — loss % since the process started.
+- `rtt min / mean / max / last` — over the same 10‑probe window, in ms. If the
+  last probe failed, `last` shows its status (e.g. `TIMEOUT`); if there are no
+  successful probes in the window, min/mean/max show `-`.
+- Rows with loss in the window are highlighted and marked `<- loss`.
+
+When stdout is **piped or redirected** (into a file, a service, etc.) `run`
+falls back to clean append-only blocks with no escape codes — good for logs.
+Force the dashboard over a pipe with `PINGTRACE_TTY=1`.
+
+Flags:
+
+- `--duration <seconds>` — run for N seconds then stop cleanly (handy for tests).
+- `--config <path>` — config file (default `config.json`).
+
+Stopping with `Ctrl+C` flushes and seals the current segment; nothing is lost.
+
+## `discover` — build a hop ladder
+
+```
+pingtrace discover <dest> [--add] [--config <path>]
+```
+
+Runs one traceroute to `<dest>` and prints the hops:
+
+```
+traceroute to 8.8.8.8 (8.8.8.8):
+   1  192.168.31.1     3.0ms
+   2  10.200.210.1     56.0ms
+   3  10.0.0.1         55.0ms
+   ...
+  10  8.8.8.8          67.0ms  (dest)
+```
+
+With `--add`, each responding hop is appended to the config as an ICMP target
+tagged `path_group=<dest>`, `hop_index=N`. Those rungs are then probed like any
+other target, so you continuously see **how far the path gets and where it
+stalls** — far more reliable than reading hops from an occasional traceroute.
+
+## `analyze` — offline reports
+
+```
+pingtrace analyze [--from <t>] [--to <t>] [--target <name|id>] [--by-hour] [--heatmap] [--config <path>]
+```
+
+Defaults to the last 30 days. Always prints a per-target summary and the outage
+list; add `--by-hour` for a loss-by-hour-of-day histogram (catches "only in the
+evening" problems) and `--heatmap` for a day-of-week × hour grid.
+
+```
+target               sent    lost   loss%   rtt_min   rtt_avg   rtt_max
+----------------------------------------------------------------------
+cloudflare            900       3   0.33%      52.0      55.9      61.0
+hk                    900      71   7.89%     234.0     256.0     466.0
+
+outages:
+  #12   hk    2026-06-28 19:18:27  dur=74.0s lost=75 type=host  trace=traces/1782661107003_6.txt
+```
+
+Built from the per-minute rollups (fast, kept forever) and `events.csv`.
+
+## `export` — raw window to CSV
+
+```
+pingtrace export --from <t> [--to <t>] [--target <name|id>] [--out <file.csv>] [--config <path>]
+```
+
+One row per probe attempt. Writes to `--out` or stdout.
+
+```
+utc_iso,utc_ms,target_id,target,status,rtt_ms,reply_ttl,src_ip
+2026-06-28 16:18:27.003,1782663507003,6,hk,OK,235.0,52,
+2026-06-28 16:18:28.005,1782663508005,6,hk,TIMEOUT,,0,
+```
+
+`src_ip` is the router that returned an ICMP error (Time-Exceeded /
+Unreachable) — free localization of where a packet died.
+
+## `verify` — repair storage
+
+```
+pingtrace verify [--config <path>]
+```
+
+Seals any leftover `.part` files (e.g. after a hard crash) and rebuilds
+`index.csv` by scanning segment headers.
+
+## Time arguments
+
+`--from` / `--to` accept:
+
+- absolute **local** time `YYYY-MM-DD` or `YYYY-MM-DD HH:MM[:SS]` (DST-aware),
+- relative `<N>d` / `<N>h` / `<N>m` — that long ago,
+- `now`.
+
+Example: `--from "2026-06-20 09:00" --to 1h`.
+
+## How outages are detected
+
+A target's outage **opens** after `fail_threshold` consecutive failures
+(back-dated to the first one) and **closes** on the next success; it is only
+logged if it lasted at least `min_outage_ms`. The `type` column tells you who is
+at fault:
+
+- `host` — only this target is failing → the host or its path.
+- `local` — every target is failing at once → your channel / monitor, not the hosts.
+- `monitor_gap` — the machine slept or the clock jumped; a synthetic marker so a
+  gap isn't mistaken for an outage.
+
+When `trigger_traceroute` is on, opening an outage saves a traceroute to
+`traces/<start>_<targetid>.txt`, referenced from the event row.
+
 ## Data layout (under `storage.dir`)
 
-- `seg_<startutc>.zst` — hourly sealed raw segments (12-byte records, zstd). `*.part` is the active hour.
-- `index.csv` — segment index (start/end/file/count/targets) for fast seeks.
-- `rollup/<YYYY-MM-DD>.csv` — per-minute summaries, kept forever.
-- `events.csv` — detected outages (`host` / `local` / `monitor_gap`) with a `trace_ref`.
-- `traces/<start>_<targetid>.txt` — traceroute captured at the moment of each outage.
-- `addresses.csv` — id↔ip map for ICMP-error responders (`src_id` in raw records).
+| File | Contents |
+|---|---|
+| `seg_<startutc>.zst` | Sealed hourly raw segment (12-byte records, zstd). |
+| `seg_<startutc>.part` | The active (current-hour) segment. |
+| `index.csv` | `start,end,file,record_count,targets` — for fast seeks. |
+| `rollup/<YYYY-MM-DD>.csv` | Per-minute `sent,lost,loss%,rtt_min/avg/p50/p95/max`. Kept forever. |
+| `events.csv` | Outages: id, target, start/end, duration, lost, type, trace_ref. |
+| `traces/<start>_<targetid>.txt` | Traceroute captured when an outage opened. |
+| `addresses.csv` | id↔ip map for ICMP-error responders (`src_id`). |
 
-Times are stored as UTC milliseconds; local-time conversion (DST-aware) happens
-only at analysis time.
+Status codes: `OK · TIMEOUT · DEST_UNREACH · TTL_EXPIRED · OTHER_ICMP_ERR ·
+SEND_ERR · MONITOR_GAP`.
+
+Times are stored as **UTC milliseconds**; local-time conversion (DST-aware)
+happens only at analysis time, so day/night histograms stay correct across DST.
+
+## Notes & troubleshooting
+
+- **No admin rights** are needed (`IcmpSendEcho2`).
+- Keep **`zstd.dll` next to `pingtrace.exe`** (the build copies it). If you move
+  the exe, move the dll too.
+- The dashboard **disables QuickEdit** while running so a mouse click can't
+  freeze output; it's restored on `Ctrl+C`. To copy text from the window, stop
+  the run (history is on disk) — or pipe output to a file.
+- Running as an **always-on service / scheduled task**: redirect stdout to a
+  log file (you'll get the clean append-mode output) and point `storage.dir` at
+  a persistent location.
+- Sample volume: 10 hosts × 1 Hz ≈ 8 MB/day of raw before zstd, a few hundred
+  MB/year after; rollups are tiny and compress to nothing.
