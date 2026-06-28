@@ -1,0 +1,12 @@
+/build/
+/data/
+/data_*/
+/out/
+/config.json
+/config_*.json
+/window.csv
+/*.export.csv
+vcpkg_installed/
+*.user
+.vs/
+CMakeUserPresets.json

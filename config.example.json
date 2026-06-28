@@ -1,0 +1,20 @@
+{
+  "storage": {
+    "dir": "C:/pingtrace/data",
+    "segment_minutes": 60,
+    "raw_retention_days": 14
+  },
+  "defaults": {
+    "interval_ms": 1000,
+    "timeout_ms": 1500
+  },
+  "events": {
+    "fail_threshold": 3,
+    "min_outage_ms": 2000,
+    "trigger_traceroute": true
+  },
+  "targets": [
+    { "name": "cloudflare", "address": "1.1.1.1", "proto": "icmp" },
+    { "name": "google-dns", "address": "8.8.8.8", "proto": "icmp" }
+  ]
+}
