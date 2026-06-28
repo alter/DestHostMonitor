@@ -112,6 +112,21 @@ void trace_loop(BlockingQueue<TraceJob>* jobs, std::string dir,
     }
 }
 
+// Compact (<=8 char) status label for the dashboard "last" cell so it never
+// gets truncated by the column width.
+const char* short_status(Status s) {
+    switch (s) {
+        case Status::Ok:           return "OK";
+        case Status::Timeout:      return "TIMEOUT";
+        case Status::DestUnreach:  return "UNREACH";
+        case Status::TtlExpired:   return "TTL_EXP";
+        case Status::OtherIcmpErr: return "ICMP_ERR";
+        case Status::SendErr:      return "SEND_ERR";
+        case Status::MonitorGap:   return "GAP";
+    }
+    return "?";
+}
+
 // Writer: drains samples into hourly segments, sealing each at the boundary and
 // on exit, and prints a periodic summary.
 void writer_loop(BlockingQueue<ProbeSample>* samples, const Config* cfg,
@@ -191,7 +206,7 @@ void writer_loop(BlockingQueue<ProbeSample>* samples, const Config* cfg,
             SetConsoleMode(h_in, (in_mode_saved & ~ENABLE_QUICK_EDIT_MODE) | ENABLE_EXTENDED_FLAGS);
             in_mode_restore = true;
         }
-        std::printf("pingtrace live - in-place; history on disk (%s); Ctrl+C to stop\n",
+        std::printf("pingtrace live - in-place; rtt in ms; history on disk (%s); Ctrl+C to stop\n",
                     dir.c_str());
     }
     const double writer_start = mono_ms();
@@ -299,9 +314,12 @@ void writer_loop(BlockingQueue<ProbeSample>* samples, const Config* cfg,
                 std::printf("\n==== %s UTC | window=last %zu probes | tot=since start ====\n",
                             format_utc_ms(now_utc_ms()).c_str(), kWindowProbes);
             }
-            std::printf("%s  %-16s %12s %6s    %7s %7s %7s %9s\n",
-                        eol, "target", "loss(last10)", "total",
-                        "rtt min", "mean", "max", "last(ms)");
+            // Every column is a fixed-width field; the header and the data rows
+            // use the SAME widths (and `.N` precision caps overflow), so nothing
+            // can ever drift out of alignment.
+            std::printf("%s  %-16.16s %9.9s %7.7s %12.12s %7.7s %8.8s %8.8s %8.8s %8.8s\n",
+                        eol, "target", "loss(10)", "win%", "loss(total)", "tot%",
+                        "min", "mean", "max", "last");
             ++lines;
 
             for (const auto& [id, st2] : stats) {
@@ -318,7 +336,17 @@ void writer_loop(BlockingQueue<ProbeSample>* samples, const Config* cfg,
                 const double w_loss = w_sent ? 100.0 * w_lost / w_sent : 0.0;
                 const double c_loss = st2.sent ? 100.0 * st2.lost / st2.sent : 0.0;
 
+                // Pre-render each cell to a string, then print with fixed widths.
+                char c_l10[16], c_wpct[12], c_tot[24], c_tpct[12];
                 char cmin[10], cmean[10], cmax[10], clast[12];
+                std::snprintf(c_l10, sizeof(c_l10), "%llu/%llu",
+                              static_cast<unsigned long long>(w_lost),
+                              static_cast<unsigned long long>(w_sent));
+                std::snprintf(c_wpct, sizeof(c_wpct), "%.1f%%", w_loss);
+                std::snprintf(c_tot, sizeof(c_tot), "%llu/%llu",
+                              static_cast<unsigned long long>(st2.lost),
+                              static_cast<unsigned long long>(st2.sent));
+                std::snprintf(c_tpct, sizeof(c_tpct), "%.1f%%", c_loss);
                 if (rok) {
                     std::snprintf(cmin,  sizeof(cmin),  "%.1f", rmin / 10.0);
                     std::snprintf(cmean, sizeof(cmean), "%.1f", (rsum / static_cast<double>(rok)) / 10.0);
@@ -328,16 +356,14 @@ void writer_loop(BlockingQueue<ProbeSample>* samples, const Config* cfg,
                     std::snprintf(cmean, sizeof(cmean), "-");
                     std::snprintf(cmax, sizeof(cmax), "-");
                 }
-                if (st2.rtt == kRttNa) std::snprintf(clast, sizeof(clast), "%s", to_string(st2.last));
+                if (st2.rtt == kRttNa) std::snprintf(clast, sizeof(clast), "%s", short_status(st2.last));
                 else std::snprintf(clast, sizeof(clast), "%.1f", st2.rtt / 10.0);
 
                 const char* color = (tty && w_loss > 0.0) ? "\x1b[31m" : "";
                 const char* reset = (tty && w_loss > 0.0) ? "\x1b[0m" : "";
-                std::printf("%s  %s%-16s %3llu/%-3llu %5.1f%% %5.1f%%   %7s %7s %7s %9s%s%s\n",
+                std::printf("%s  %s%-16.16s %9.9s %7.7s %12.12s %7.7s %8.8s %8.8s %8.8s %8.8s%s%s\n",
                             eol, color, name_of[id].c_str(),
-                            static_cast<unsigned long long>(w_lost),
-                            static_cast<unsigned long long>(w_sent), w_loss, c_loss,
-                            cmin, cmean, cmax, clast,
+                            c_l10, c_wpct, c_tot, c_tpct, cmin, cmean, cmax, clast,
                             (w_loss > 0.0 ? "  <- loss" : ""), reset);
                 ++lines;
             }
