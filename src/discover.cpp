@@ -25,12 +25,20 @@ int run_discover(const std::string& dest, bool add, const std::string& config_pa
 
     const auto hops = traceroute(addr);
     for (const auto& h : hops) {
-        char rtt[16];
-        if (h.addr == 0 || h.rtt_tenths == kRttNa) std::snprintf(rtt, sizeof(rtt), "-");
-        else std::snprintf(rtt, sizeof(rtt), "%.1fms", h.rtt_tenths / 10.0);
-        std::printf("  %2d  %-16s %s%s\n", h.ttl,
-                    h.addr ? ipv4_to_string(h.addr).c_str() : "*",
-                    rtt, h.reached ? "  (dest)" : "");
+        std::printf("  %2d  ", h.ttl);
+        if (h.replies.empty()) {
+            std::printf("*");
+        } else {
+            // One line may list several responders when ECMP splits the hop.
+            for (size_t i = 0; i < h.replies.size(); ++i) {
+                const auto& r = h.replies[i];
+                char rtt[16];
+                if (r.rtt_tenths == kRttNa) std::snprintf(rtt, sizeof(rtt), "-");
+                else std::snprintf(rtt, sizeof(rtt), "%.1fms", r.rtt_tenths / 10.0);
+                std::printf("%s%s (%s)", (i ? " , " : ""), ipv4_to_string(r.addr).c_str(), rtt);
+            }
+        }
+        std::printf("%s\n", h.reached ? "  (dest)" : "");
     }
 
     if (!add) {
@@ -61,19 +69,25 @@ int run_discover(const std::string& dest, bool add, const std::string& config_pa
 
     int added = 0;
     for (const auto& h : hops) {
-        if (h.addr == 0) continue;  // unresponsive hop
-        const std::string ip = ipv4_to_string(h.addr);
-        if (existing.count(ip)) continue;
+        int leg = 0;
+        for (const auto& r : h.replies) {  // ECMP: a hop may have several responders
+            if (r.addr == 0) continue;
+            const std::string ip = ipv4_to_string(r.addr);
+            if (existing.count(ip)) continue;
 
-        json t;
-        t["name"]       = dest + "-hop" + std::to_string(h.ttl);
-        t["address"]    = ip;
-        t["proto"]      = "icmp";
-        t["path_group"] = dest;
-        t["hop_index"]  = h.ttl;
-        j["targets"].push_back(t);
-        existing.insert(ip);
-        ++added;
+            const std::string suffix = h.replies.size() > 1
+                ? ("-" + std::string(1, static_cast<char>('a' + leg))) : "";
+            json t;
+            t["name"]       = dest + "-hop" + std::to_string(h.ttl) + suffix;
+            t["address"]    = ip;
+            t["proto"]      = "icmp";
+            t["path_group"] = dest;
+            t["hop_index"]  = h.ttl;
+            j["targets"].push_back(t);
+            existing.insert(ip);
+            ++added;
+            ++leg;
+        }
     }
 
     std::ofstream out(config_path, std::ios::trunc);

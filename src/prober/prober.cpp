@@ -97,15 +97,23 @@ void trace_loop(BlockingQueue<TraceJob>* jobs, std::string dir,
         std::fprintf(f, "# pingtrace traceroute\n# target: %s (%s)\n# outage start: %s (local)\n",
                      job->name.c_str(), ipv4_to_string(job->addr).c_str(),
                      format_local_ms(job->start_utc).c_str());
-        std::fprintf(f, "%-4s %-16s %s\n", "ttl", "ip", "rtt");
-        const auto hops = traceroute(job->addr, 30, 1000, 2, stop);
+        std::fprintf(f, "%-4s %s\n", "ttl", "responder(s) [rtt]  (ECMP-aware)");
+        const auto hops = traceroute(job->addr, 30, 1000, 4, stop);
         for (const auto& h : hops) {
-            char rtt[16];
-            if (h.addr == 0 || h.rtt_tenths == kRttNa) std::snprintf(rtt, sizeof(rtt), "-");
-            else std::snprintf(rtt, sizeof(rtt), "%.1fms", h.rtt_tenths / 10.0);
-            std::fprintf(f, "%-4d %-16s %s%s\n", h.ttl,
-                         h.addr ? ipv4_to_string(h.addr).c_str() : "*",
-                         rtt, h.reached ? "  (dest)" : "");
+            std::fprintf(f, "%-4d ", h.ttl);
+            if (h.replies.empty()) {
+                std::fprintf(f, "*");
+            } else {
+                for (size_t i = 0; i < h.replies.size(); ++i) {
+                    const auto& r = h.replies[i];
+                    char rtt[16];
+                    if (r.rtt_tenths == kRttNa) std::snprintf(rtt, sizeof(rtt), "-");
+                    else std::snprintf(rtt, sizeof(rtt), "%.1fms", r.rtt_tenths / 10.0);
+                    std::fprintf(f, "%s%s [%s]", (i ? " , " : ""),
+                                 ipv4_to_string(r.addr).c_str(), rtt);
+                }
+            }
+            std::fprintf(f, "%s\n", h.reached ? "  (dest)" : "");
         }
         std::fclose(f);
         log_info("trace saved: " + path + " (" + std::to_string(hops.size()) + " hops)");
