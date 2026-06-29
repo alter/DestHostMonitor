@@ -2,6 +2,7 @@
 /data/
 /data_*/
 /out/
+/reports/
 /config.json
 /config_*.json
 /window.csv
