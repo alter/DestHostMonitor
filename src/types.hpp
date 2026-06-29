@@ -31,6 +31,7 @@ struct Target {
     uint32_t    timeout_ms  = 1500;
     std::string path_group;       // ladder grouping for localization
     int         hop_index   = -1; // position in the ladder, -1 = n/a
+    bool        probe       = true; // false = ladder label only, never probed
 };
 
 constexpr uint16_t kRttNa = 0xFFFF;  // sentinel for "RTT not available"

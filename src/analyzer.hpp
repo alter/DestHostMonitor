@@ -13,6 +13,7 @@ struct AnalyzeOptions {
     std::string target_filter;        // name or id; empty = all
     bool        by_hour        = false;
     bool        heatmap        = false;
+    bool        ladder         = false;  // per-path_group hop-by-hop loss/rtt
 };
 
 // Offline report over [from,to]: per-target summary and outage list always;

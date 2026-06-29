@@ -75,6 +75,7 @@ Config load_config(const std::string& path) {
         tg.timeout_ms  = t.value("timeout_ms", cfg.default_timeout_ms);
         tg.path_group  = t.value("path_group", std::string{});
         tg.hop_index   = t.value("hop_index", -1);
+        tg.probe       = t.value("probe", true);
 
         if (tg.proto == Proto::Tcp && tg.port == 0) {
             throw std::runtime_error("tcp target '" + tg.name + "' requires a port");

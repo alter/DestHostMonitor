@@ -87,13 +87,17 @@ std::vector<RollupRow> load_rollups(const std::string& dir, const AnalyzeOptions
     return rows;
 }
 
-void print_summary(const std::vector<RollupRow>& rows) {
-    struct Agg {
-        std::string name;
-        uint64_t sent = 0, lost = 0, ok = 0;
-        double   rtt_min = std::numeric_limits<double>::infinity();
-        double   rtt_max = 0, rtt_wsum = 0;
-    };
+// Per-target aggregate over the window.
+struct Agg {
+    std::string name;
+    uint64_t sent = 0, lost = 0, ok = 0;
+    double   rtt_min = std::numeric_limits<double>::infinity();
+    double   rtt_max = 0, rtt_wsum = 0;
+    double   loss_pct() const { return sent ? 100.0 * lost / sent : 0.0; }
+    double   rtt_avg()  const { return ok ? rtt_wsum / ok : 0.0; }
+};
+
+std::map<uint16_t, Agg> aggregate(const std::vector<RollupRow>& rows) {
     std::map<uint16_t, Agg> agg;
     for (const auto& r : rows) {
         Agg& a = agg[r.target_id];
@@ -108,24 +112,79 @@ void print_summary(const std::vector<RollupRow>& rows) {
             a.rtt_max = std::max(a.rtt_max, r.rtt_max);
         }
     }
+    return agg;
+}
 
+void print_summary(const std::map<uint16_t, Agg>& agg) {
     std::printf("\n%-16s %8s %7s %7s %9s %9s %9s\n",
                 "target", "sent", "lost", "loss%", "rtt_min", "rtt_avg", "rtt_max");
     std::printf("%s\n", std::string(70, '-').c_str());
     for (const auto& [id, a] : agg) {
-        const double loss = a.sent ? 100.0 * a.lost / a.sent : 0.0;
-        const double avg  = a.ok ? a.rtt_wsum / a.ok : 0.0;
         char rmin[16] = "-", ravg[16] = "-", rmax[16] = "-";
         if (a.ok) {
             std::snprintf(rmin, sizeof(rmin), "%.1f", a.rtt_min);
-            std::snprintf(ravg, sizeof(ravg), "%.1f", avg);
+            std::snprintf(ravg, sizeof(ravg), "%.1f", a.rtt_avg());
             std::snprintf(rmax, sizeof(rmax), "%.1f", a.rtt_max);
         }
         std::printf("%-16s %8llu %7llu %6.2f%% %9s %9s %9s\n",
                     a.name.c_str(),
                     static_cast<unsigned long long>(a.sent),
                     static_cast<unsigned long long>(a.lost),
-                    loss, rmin, ravg, rmax);
+                    a.loss_pct(), rmin, ravg, rmax);
+    }
+}
+
+// Ladder view: for each path_group, walk its hops in hop_index order and show
+// loss/rtt, so you see at which hop loss first climbs. Targets configured in a
+// group but without data yet (e.g. a freshly added hop) show '-'.
+void print_ladders(const Config& cfg, const std::map<uint16_t, Agg>& agg) {
+    std::map<std::string, const Agg*> by_name;
+    for (const auto& [id, a] : agg) by_name[a.name] = &a;
+
+    // "*" means "every path" (e.g. the home gateway, shared hop 0 of all paths);
+    // it is not itself a group.
+    std::vector<std::string> groups;  // first-seen order
+    for (const auto& t : cfg.targets) {
+        if (t.path_group.empty() || t.path_group == "*") continue;
+        if (std::find(groups.begin(), groups.end(), t.path_group) == groups.end())
+            groups.push_back(t.path_group);
+    }
+    if (groups.empty()) {
+        std::printf("\nladders: (no targets have a path_group)\n");
+        return;
+    }
+
+    for (const auto& g : groups) {
+        std::vector<const Target*> hops;
+        for (const auto& t : cfg.targets)
+            if (t.path_group == g || t.path_group == "*") hops.push_back(&t);
+        std::sort(hops.begin(), hops.end(), [](const Target* a, const Target* b) {
+            if (a->hop_index != b->hop_index) return a->hop_index < b->hop_index;
+            return a->name < b->name;
+        });
+
+        std::printf("\npath: %s\n", g.c_str());
+        std::printf("  %-3s %-20s %8s %9s\n", "hop", "target", "loss%", "rtt_avg");
+        double prev_loss = -1.0;
+        for (const Target* t : hops) {
+            char loss[16] = "-", ravg[16] = "-";
+            const char* mark = "";
+            if (!t->probe) {
+                // Ladder label only (not probed); its real state is in the
+                // per-event traceroutes. Don't affect the loss-climb baseline.
+                std::snprintf(loss, sizeof(loss), "trace");
+            } else if (auto it = by_name.find(t->name); it != by_name.end()) {
+                const Agg* a = it->second;
+                std::snprintf(loss, sizeof(loss), "%.2f%%", a->loss_pct());
+                if (a->ok) std::snprintf(ravg, sizeof(ravg), "%.1f", a->rtt_avg());
+                // Flag the first hop where loss jumps >=1% over the previous hop.
+                if (prev_loss >= 0.0 && a->loss_pct() - prev_loss >= 1.0)
+                    mark = "  <- loss climbs here";
+                prev_loss = a->loss_pct();
+            }
+            std::printf("  %-3d %-20.20s %8s %9s%s\n",
+                        t->hop_index, t->name.c_str(), loss, ravg, mark);
+        }
     }
 }
 
@@ -207,9 +266,11 @@ int run_analyze(const Config& cfg, const AnalyzeOptions& opt) {
     if (rows.empty()) {
         std::printf("(no rollup data in window)\n");
     } else {
-        print_summary(rows);
+        const auto agg = aggregate(rows);
+        print_summary(agg);
         if (opt.by_hour) print_by_hour(rows);
         if (opt.heatmap) print_heatmap(rows);
+        if (opt.ladder)  print_ladders(cfg, agg);
     }
     print_outages(cfg, opt);
     return 0;

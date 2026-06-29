@@ -48,8 +48,8 @@ void print_usage() {
         "  pingtrace discover <dest> [--add] [--config <path>]\n"
         "      Traceroute to <dest>; with --add, append the hops as ladder targets.\n"
         "\n"
-        "  pingtrace analyze [--from <t>] [--to <t>] [--target <name|id>] [--by-hour] [--heatmap]\n"
-        "      Offline report: per-target summary, outage list, loss-by-hour, heatmap.\n"
+        "  pingtrace analyze [--from <t>] [--to <t>] [--target <name|id>] [--by-hour] [--heatmap] [--ladder]\n"
+        "      Offline report: per-target summary, outage list, loss-by-hour, heatmap, path ladders.\n"
         "\n"
         "  pingtrace export --from <t> [--to <t>] [--target <name|id>] [--out <file.csv>]\n"
         "      Dump raw records in a window to CSV (stdout if no --out).\n"
@@ -181,6 +181,7 @@ int cmd_analyze(const std::vector<std::string>& args) {
     opt.target_filter = flag_value(args, "--target").value_or("");
     opt.by_hour = has_flag(args, "--by-hour");
     opt.heatmap = has_flag(args, "--heatmap");
+    opt.ladder  = has_flag(args, "--ladder");
     return run_analyze(cfg, opt);
 }
 

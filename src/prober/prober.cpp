@@ -206,11 +206,13 @@ void writer_loop(BlockingQueue<ProbeSample>* samples, const Config* cfg,
             SetConsoleMode(h_in, (in_mode_saved & ~ENABLE_QUICK_EDIT_MODE) | ENABLE_EXTENDED_FLAGS);
             in_mode_restore = true;
         }
-        std::printf("pingtrace live - in-place; rtt in ms; history on disk (%s); Ctrl+C to stop\n",
-                    dir.c_str());
+        // Switch to the alternate screen buffer and hide the cursor. The alt
+        // buffer has no scrollback, so a full home+clear redraw each frame can
+        // never pile up (the cause of the old "stacking" — viewport scroll left
+        // a trail) and a stray log line just gets overwritten next frame.
+        std::printf("\x1b[?1049h\x1b[?25l");
     }
     const double writer_start = mono_ms();
-    int dash_lines = 0;  // lines drawn in the previous dashboard frame
 
     double last_render = mono_ms();
     double last_flush  = mono_ms();
@@ -297,19 +299,14 @@ void writer_loop(BlockingQueue<ProbeSample>* samples, const Config* cfg,
             for (const auto& [id, st2] : stats) total_probes += st2.sent;
 
             const char* eol = tty ? "\x1b[2K" : "";  // erase stale line content
-            int lines = 0;
 
             if (tty) {
-                // Redraw the block in place: jump back up to its first line,
-                // then overwrite each line. No screen clear -> nothing piles up
-                // in the scrollback even if the console is clicked/scrolled.
-                if (dash_lines > 0) std::printf("\x1b[%dF", dash_lines);
+                // Alt-buffer redraw: home, then overwrite every line absolutely.
                 const int up = static_cast<int>((now - writer_start) / 1000.0);
-                std::printf("%spingtrace live   %s UTC   uptime %02d:%02d:%02d   probes %llu\n",
+                std::printf("\x1b[H%spingtrace live   %s UTC   uptime %02d:%02d:%02d   probes %llu   rtt ms   (Ctrl+C to stop)\n",
                             eol, format_utc_ms(now_utc_ms()).c_str(),
                             up / 3600, (up % 3600) / 60, up % 60,
                             static_cast<unsigned long long>(total_probes));
-                ++lines;
             } else {
                 std::printf("\n==== %s UTC | window=last %zu probes | tot=since start ====\n",
                             format_utc_ms(now_utc_ms()).c_str(), kWindowProbes);
@@ -320,7 +317,6 @@ void writer_loop(BlockingQueue<ProbeSample>* samples, const Config* cfg,
             std::printf("%s  %-16.16s %9.9s %7.7s %12.12s %7.7s %8.8s %8.8s %8.8s %8.8s\n",
                         eol, "target", "loss(10)", "win%", "loss(total)", "tot%",
                         "min", "mean", "max", "last");
-            ++lines;
 
             for (const auto& [id, st2] : stats) {
                 // Loss + rtt min/mean/max over the sliding window (OK probes only).
@@ -365,18 +361,17 @@ void writer_loop(BlockingQueue<ProbeSample>* samples, const Config* cfg,
                             eol, color, name_of[id].c_str(),
                             c_l10, c_wpct, c_tot, c_tpct, cmin, cmean, cmax, clast,
                             (w_loss > 0.0 ? "  <- loss" : ""), reset);
-                ++lines;
             }
+            if (tty) std::printf("\x1b[J");  // clear anything below the block
             std::fflush(stdout);
-            dash_lines = lines;
             last_render = now;
         }
     }
 
-    // Restore the console (re-enable QuickEdit) and drop below the dashboard
-    // so shutdown logs print cleanly underneath it.
+    // Leave the alternate buffer (restores the user's previous screen), show the
+    // cursor, and re-enable QuickEdit. Shutdown logs then print normally.
+    if (tty) { std::printf("\x1b[?25h\x1b[?1049l"); std::fflush(stdout); }
     if (in_mode_restore) SetConsoleMode(h_in, in_mode_saved);
-    if (tty) { std::printf("\n"); std::fflush(stdout); }
 
     // Close out aggregation and seal the final active segment on shutdown.
     detector.finalize(last_utc);
@@ -393,6 +388,10 @@ int run_prober(const Config& cfg, std::atomic<bool>* stop, uint32_t simulate_gap
     // Resolve targets up front (ICMP and TCP).
     std::vector<ActiveTarget> active;
     for (const auto& t : cfg.targets) {
+        if (!t.probe) {
+            log_info("ladder-only target '" + t.name + "' (probe:false), not probed");
+            continue;
+        }
         const uint32_t addr = resolve_ipv4(t.address);
         if (addr == 0) {
             log_warn("cannot resolve '" + t.address + "' for target '" + t.name + "'");

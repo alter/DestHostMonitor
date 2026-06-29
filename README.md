@@ -89,7 +89,8 @@ Dependencies (`nlohmann-json`, `zstd`) are pulled by vcpkg on the first build.
 | | `proto` | `icmp` or `tcp`. |
 | | `port` | Required for `tcp`. |
 | | `interval_ms` / `timeout_ms` | Optional per-target overrides. |
-| | `path_group` / `hop_index` | Tag a target as a rung of a path's ladder (set by `discover --add`). |
+| | `path_group` / `hop_index` | Place a target on a named path's ladder at a given hop (see `analyze --ladder`). `path_group: "*"` puts it in **every** ladder — e.g. the gateway as the shared hop 0. |
+| | `probe` | `false` = ladder label only: never probed (no false 100% loss for hops that ignore ping), but still shown as a `trace` rung and captured by trace-on-event. Default `true`. |
 
 TCP probes connect and measure time to SYN-ACK (open) or RST (closed) — both
 mean the host responded. Useful when routers deprioritize ICMP: probe the real
@@ -109,29 +110,30 @@ build\pingtrace.exe analyze --from 7d --by-hour --heatmap
 pingtrace run [--config <path>] [--duration <seconds>]
 ```
 
-In an interactive terminal you get a **live dashboard** that updates in place:
+In an interactive terminal you get a **live full-screen dashboard** (alternate
+screen buffer, like `top`) that redraws in place:
 
 ```
-pingtrace live - in-place; history on disk (C:/pingtrace/data); Ctrl+C to stop
-pingtrace live   2026-06-28 17:35:22.308 UTC   uptime 00:02:39   probes 1436
-  target           loss(last10) total    rtt min   mean    max  last(ms)
-  home-router       0/10  0.0%  0.0%        1.0    5.4    41.0     7.0
-  selectel          0/10  0.0%  0.0%        5.0    9.7    46.0     8.0
-  hk                3/10 30.0%  0.6%      234.0  256.6   466.0   237.0  <- loss
-  cloudflare        0/10  0.0%  0.0%       52.0   55.9    61.0    59.0
+pingtrace live   2026-06-29 13:11:32 UTC   uptime 02:21:29   probes 76407   rtt ms   (Ctrl+C to stop)
+  target            loss(10)    win%  loss(total)    tot%      min     mean      max     last
+  home-router          0/10    0.0%   151/76407    0.20%      1.0      4.0     71.0      3.0
+  hk                   3/10   30.0%  1476/76407    1.93%    234.0    256.6    466.0    237.0  <- loss
+  cloudflare           0/10    0.0%  1129/76407    1.48%     52.0     58.3    152.0     60.0
 ```
 
-- `loss(last10)` — failures / probes over a **sliding window of the last 10
-  probes** per target (1‑10, then 2‑11, …), plus that window's loss %.
-- `total` — loss % since the process started.
-- `rtt min / mean / max / last` — over the same 10‑probe window, in ms. If the
-  last probe failed, `last` shows its status (e.g. `TIMEOUT`); if there are no
-  successful probes in the window, min/mean/max show `-`.
-- Rows with loss in the window are highlighted and marked `<- loss`.
+- `loss(10)` / `win%` — failures over a **sliding window of the last 10 probes**
+  per target (1‑10, then 2‑11, …) and that window's loss %.
+- `loss(total)` / `tot%` — totals since the process started.
+- `min / mean / max / last` — RTT (ms) over the same 10‑probe window. A failed
+  last probe shows its status (`TIMEOUT`, `UNREACH`, …); no successful samples in
+  the window → `-`.
+- Rows with loss in the window are shown in red and marked `<- loss`.
 
-When stdout is **piped or redirected** (into a file, a service, etc.) `run`
-falls back to clean append-only blocks with no escape codes — good for logs.
-Force the dashboard over a pipe with `PINGTRACE_TTY=1`.
+The alt-buffer view survives mouse clicks and scrolling, and on `Ctrl+C` it
+restores your previous screen (all history is on disk). When stdout is **piped
+or redirected** (a file, a service) `run` falls back to clean append-only blocks
+with no escape codes — good for logs. Force the dashboard over a pipe with
+`PINGTRACE_TTY=1`.
 
 Flags:
 
@@ -165,12 +167,13 @@ stalls** — far more reliable than reading hops from an occasional traceroute.
 ## `analyze` — offline reports
 
 ```
-pingtrace analyze [--from <t>] [--to <t>] [--target <name|id>] [--by-hour] [--heatmap] [--config <path>]
+pingtrace analyze [--from <t>] [--to <t>] [--target <name|id>] [--by-hour] [--heatmap] [--ladder] [--config <path>]
 ```
 
 Defaults to the last 30 days. Always prints a per-target summary and the outage
 list; add `--by-hour` for a loss-by-hour-of-day histogram (catches "only in the
-evening" problems) and `--heatmap` for a day-of-week × hour grid.
+evening" problems), `--heatmap` for a day-of-week × hour grid, and `--ladder`
+for per-path hop-by-hop loss/RTT.
 
 ```
 target               sent    lost   loss%   rtt_min   rtt_avg   rtt_max
@@ -180,6 +183,23 @@ hk                    900      71   7.89%     234.0     256.0     466.0
 
 outages:
   #12   hk    2026-06-28 19:18:27  dur=74.0s lost=75 type=host  trace=traces/1782661107003_6.txt
+```
+
+With `--ladder`, targets that have a `path_group` are walked in `hop_index`
+order so you can see **at which hop loss first climbs**. Hops marked
+`probe: false` show as `trace`; the gateway (`path_group: "*"`) heads every
+ladder as hop 0:
+
+```
+path: trunk
+  hop target                  loss%   rtt_avg
+  0   home-router             0.22%       4.1
+  1   trunk-h1-gw             trace         -
+  2   trunk-h2                trace         -
+  3   trunk-h3-isp            0.88%       7.9
+  4   trunk-h4-isp            0.74%      51.6
+  5   trunk-h5-comcor-a       2.19%     239.5  <- loss climbs here
+  5   trunk-h5-comcor-b       0.76%      13.2
 ```
 
 Built from the per-minute rollups (fast, kept forever) and `events.csv`.
