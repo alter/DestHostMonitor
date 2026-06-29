@@ -436,8 +436,14 @@ int run_prober(const Config& cfg, std::atomic<bool>* stop, uint32_t simulate_gap
     // Scheduler loop on this thread.
     Scheduler sched;
     const double start = mono_ms();
+    const double n = static_cast<double>(active.size());
     for (size_t i = 0; i < active.size(); ++i) {
-        sched.add(i, static_cast<double>(active[i].interval_ms), start);
+        // Phase-spread the first-due time across the interval so the N probes
+        // don't all fire in one synchronized burst each tick. A burst of ICMP
+        // echoes gets rate-limited (locally / at the router / ISP) and shows up
+        // as uniform false loss across every target at once.
+        const double phase = static_cast<double>(active[i].interval_ms) * static_cast<double>(i) / n;
+        sched.add(i, static_cast<double>(active[i].interval_ms), start + phase);
     }
 
     // Monitor-gap detection: wall clock advancing far more than the monotonic
