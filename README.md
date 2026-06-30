@@ -142,7 +142,7 @@ grouped under cyan `- <group>` label rows and losing rows in red:
 ```
 pingtrace live   2026-06-30 16:08:22 UTC   uptime 02:21:29   probes 76407   (rtt ms, Ctrl+C to stop)
 ┌─────────────┬────────┬──────┬───────────┬──────┬───────┬───────┬───────┬───────┐
-│target       │loss(10)│win%  │total      │tot%  │min    │mean   │max    │last   │
+│target       │loss(10)│loss% │total      │tot%  │min    │mean   │max    │last   │
 ├─────────────┼────────┼──────┼───────────┼──────┼───────┼───────┼───────┼───────┤
 │─ root       │        │      │           │      │       │       │       │       │
 │home-router  │0/10    │0.0%  │151/76407  │0.20% │1.0    │4.0    │71.0   │3.0    │
@@ -156,8 +156,8 @@ pingtrace live   2026-06-30 16:08:22 UTC   uptime 02:21:29   probes 76407   (rtt
 
 (the `hk` row is red; the `- root` / `- trunk` / `- icmp` label rows are cyan)
 
-- `loss(10)` / `win%` — failures over a **sliding window of the last 10 probes**
-  per target (1‑10, then 2‑11, …) and that window's loss %.
+- `loss(10)` / `loss%` — failures over a **sliding window of the last 10 probes**
+  per target (1‑10, then 2‑11, …) as a count and that window's loss %.
 - `total` / `tot%` — totals since the process started.
 - `min / mean / max / last` — RTT (ms) over the same 10‑probe window. A failed
   last probe shows its status (`TIMEOUT`, `UNREACH`, …); no successful samples in
