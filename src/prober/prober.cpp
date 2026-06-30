@@ -186,8 +186,9 @@ std::string render_ftxui(const std::string& header, std::vector<DashCell>& cells
     // One bordered table built from a list of groups (label rows cyan, loss red).
     auto build_table = [](const std::vector<const Grp*>& grps) -> Element {
         std::vector<std::vector<std::string>> d;
-        d.push_back({"target", "loss(" + std::to_string(kWindowProbes) + ")", "loss%",
-                     "total", "tot%", "min", "mean", "max", "last"});
+        const std::string n = std::to_string(kWindowProbes);
+        d.push_back({"target", "loss(" + n + ")", "loss%(" + n + ")",
+                     "loss(total)", "loss%(total)", "min", "mean", "max", "last"});
         std::vector<int> label_rows, loss_rows;
         for (const auto* gr : grps) {
             label_rows.push_back(static_cast<int>(d.size()));
@@ -214,7 +215,7 @@ std::string render_ftxui(const std::string& header, std::vector<DashCell>& cells
     // PINGTRACE_COLS overrides the detected width (piped output / wrong detection).
     int term_w = Terminal::Size().dimx;
     if (const char* cw = std::getenv("PINGTRACE_COLS")) { const int v = std::atoi(cw); if (v > 0) term_w = v; }
-    const bool two_col = term_w >= 150 && groups.size() >= 2;
+    const bool two_col = term_w >= 200 && groups.size() >= 2;
 
     Element body;
     if (two_col) {
@@ -470,14 +471,15 @@ void writer_loop(BlockingQueue<ProbeSample>* samples, const Config* cfg,
                 std::fwrite(frame.data(), 1, frame.size(), stdout);
                 std::printf("\x1b[J");  // clear anything below the frame
             } else {
-                std::printf("\n==== %s UTC | window=last %zu probes | tot=since start ====\n",
+                std::printf("\n==== %s UTC | window=last %zu probes ====\n",
                             format_utc_ms(now_utc_ms()).c_str(), kWindowProbes);
-                const std::string wlabel = "loss(" + std::to_string(kWindowProbes) + ")";
-                std::printf("  %-16.16s %9.9s %7.7s %12.12s %7.7s %8.8s %8.8s %8.8s %8.8s\n",
-                            "target", wlabel.c_str(), "loss%", "loss(total)", "tot%",
+                const std::string n = std::to_string(kWindowProbes);
+                const std::string h_lw = "loss(" + n + ")", h_lwp = "loss%(" + n + ")";
+                std::printf("  %-18.18s %11.11s %12.12s %12.12s %13.13s %8.8s %8.8s %8.8s %8.8s\n",
+                            "target", h_lw.c_str(), h_lwp.c_str(), "loss(total)", "loss%(total)",
                             "min", "mean", "max", "last");
                 for (const auto& c : cells) {
-                    std::printf("  %-16.16s %9.9s %7.7s %12.12s %7.7s %8.8s %8.8s %8.8s %8.8s%s\n",
+                    std::printf("  %-18.18s %11.11s %12.12s %12.12s %13.13s %8.8s %8.8s %8.8s %8.8s%s\n",
                                 c.name.c_str(), c.loss10.c_str(), c.win.c_str(), c.total.c_str(),
                                 c.tot.c_str(), c.rmin.c_str(), c.rmean.c_str(), c.rmax.c_str(),
                                 c.last.c_str(), c.loss_red ? "  <- loss" : "");

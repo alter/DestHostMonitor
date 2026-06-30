@@ -141,24 +141,25 @@ grouped under cyan `- <group>` label rows and losing rows in red:
 
 ```
 pingtrace live   2026-06-30 16:08:22 UTC   uptime 02:21:29   probes 76407   (rtt ms, Ctrl+C to stop)
-┌─────────────┬─────────┬──────┬───────────┬──────┬───────┬───────┬───────┬───────┐
-│target       │loss(100)│loss% │total      │tot%  │min    │mean   │max    │last   │
-├─────────────┼─────────┼──────┼───────────┼──────┼───────┼───────┼───────┼───────┤
-│─ root       │         │      │           │      │       │       │       │       │
-│home-router  │0/100    │0.0%  │151/76407  │0.20% │1.0    │4.0    │71.0   │3.0    │
-│─ trunk      │         │      │           │      │       │       │       │       │
-│trunk-h1-gw  │0/100    │0.0%  │92/76401   │0.12% │2.0    │5.5    │23.0   │7.0    │
-│─ icmp       │         │      │           │      │       │       │       │       │
-│cloudflare   │0/100    │0.0%  │1129/76407 │1.48% │52.0   │58.3   │152.0  │60.0   │
-│hk           │12/100   │12.0% │1476/76407 │1.93% │234.0  │256.6  │466.0  │237.0  │
-└─────────────┴─────────┴──────┴───────────┴──────┴───────┴───────┴───────┴───────┘
+┌─────────────┬─────────┬──────────┬───────────┬────────────┬──────┬──────┬──────┬──────┐
+│target       │loss(100)│loss%(100)│loss(total)│loss%(total)│min   │mean  │max   │last  │
+├─────────────┼─────────┼──────────┼───────────┼────────────┼──────┼──────┼──────┼──────┤
+│─ root       │         │          │           │            │      │      │      │      │
+│home-router  │0/100    │0.0%      │151/76407  │0.20%       │1.0   │4.0   │71.0  │3.0   │
+│─ trunk      │         │          │           │            │      │      │      │      │
+│trunk-h1-gw  │0/100    │0.0%      │92/76401   │0.12%       │2.0   │5.5   │23.0  │7.0   │
+│─ icmp       │         │          │           │            │      │      │      │      │
+│cloudflare   │0/100    │0.0%      │1129/76407 │1.48%       │52.0  │58.3  │152.0 │60.0  │
+│hk           │12/100   │12.0%     │1476/76407 │1.93%       │234.0 │256.6 │466.0 │237.0 │
+└─────────────┴─────────┴──────────┴───────────┴────────────┴──────┴──────┴──────┴──────┘
 ```
 
 (the `hk` row is red; the `- root` / `- trunk` / `- icmp` label rows are cyan)
 
-- `loss(100)` / `loss%` — failures over a **sliding window of the last 100 probes**
-  per target (1‑100, then 2‑101, …) as a count and that window's loss %.
-- `total` / `tot%` — totals since the process started.
+- `loss(100)` / `loss%(100)` — failures over a **sliding window of the last 100
+  probes** per target (1‑100, then 2‑101, …): a count (lost/window) and its %.
+- `loss(total)` / `loss%(total)` — the same, but **cumulative since the process
+  started** (lost/sent and its %).
 - `min / mean / max / last` — RTT (ms) over the same 100‑probe window. A failed
   last probe shows its status (`TIMEOUT`, `UNREACH`, …); no successful samples in
   the window → `-`.
@@ -167,7 +168,7 @@ pingtrace live   2026-06-30 16:08:22 UTC   uptime 02:21:29   probes 76407   (rtt
 
 Targets are stacked under cyan `- <group>` label rows (each target's `group`,
 else its `path_group`). The table **stretches to fill the terminal width**, and
-on a **wide terminal** (≥150 cols) the groups split across **two tables side by
+on a **wide terminal** (≥200 cols) the groups split across **two tables side by
 side** — each filling half — so the screen is used and the list is half as tall;
 a narrow terminal gets one full-width table. Set `PINGTRACE_COLS=<n>` to override
 the detected width (force one/two columns, or fix wrong detection when piped).
