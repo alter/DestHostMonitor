@@ -17,6 +17,7 @@
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/dom/table.hpp"
 #include "ftxui/screen/screen.hpp"
+#include "ftxui/screen/terminal.hpp"
 
 #include <windows.h>
 #include <io.h>
@@ -152,49 +153,83 @@ struct DashCell {
     bool        loss_red = false;
 };
 
-// Renders the dashboard as one bordered FTXUI table with group separator rows
-// (compact, so 30+ rows still fit), losing rows in red. Returns the screen text.
+// Renders the dashboard as one (narrow terminal) or two (wide terminal) bordered
+// tables side by side. Each table stacks its groups with a cyan "- group" label
+// row, losing rows in red. Two big multi-row tables avoid the FTXUI grid collapse
+// that single-row-per-group boxes hit, and the second column uses the screen width.
 std::string render_ftxui(const std::string& header, std::vector<DashCell>& cells,
                          const std::vector<std::string>& group_order) {
     using namespace ftxui;
-    std::vector<std::vector<std::string>> d;
-    d.push_back({"target", "loss(10)", "win%", "total", "tot%", "min", "mean", "max", "last"});
-    std::vector<int> group_rows, loss_rows;
 
-    auto emit = [&](const std::string& title, std::vector<const DashCell*>& rows) {
-        if (rows.empty()) return;
-        std::sort(rows.begin(), rows.end(), [](const DashCell* a, const DashCell* b) {
+    // Collect non-empty groups (config order) + any ungrouped; track a row cost.
+    struct Grp { std::string title; std::vector<const DashCell*> rows; int cost; };
+    std::vector<Grp> groups;
+    int total_cost = 0;
+    auto add_group = [&](const std::string& g, bool ungrouped) {
+        std::vector<const DashCell*> r;
+        for (auto& c : cells) if (ungrouped ? c.group.empty() : c.group == g) r.push_back(&c);
+        if (r.empty()) return;
+        std::sort(r.begin(), r.end(), [](const DashCell* a, const DashCell* b) {
             if (a->hop_index != b->hop_index) return a->hop_index < b->hop_index;
             return a->name < b->name;
         });
-        group_rows.push_back(static_cast<int>(d.size()));
-        d.push_back({"\xE2\x94\x80 " + (title == "*" ? std::string("root") : title), "", "", "",
-                     "", "", "", "", ""});
-        for (const auto* c : rows) {
-            if (c->loss_red) loss_rows.push_back(static_cast<int>(d.size()));
-            d.push_back({c->name, c->loss10, c->win, c->total, c->tot, c->rmin, c->rmean, c->rmax, c->last});
+        const int cost = static_cast<int>(r.size()) + 1;  // data rows + a label row
+        total_cost += cost;
+        groups.push_back({g, std::move(r), cost});
+    };
+    for (const auto& g : group_order) add_group(g, false);
+    add_group("targets", true);
+
+    // One bordered table built from a list of groups (label rows cyan, loss red).
+    auto build_table = [](const std::vector<const Grp*>& grps) -> Element {
+        std::vector<std::vector<std::string>> d;
+        d.push_back({"target", "loss(10)", "win%", "total", "tot%", "min", "mean", "max", "last"});
+        std::vector<int> label_rows, loss_rows;
+        for (const auto* gr : grps) {
+            label_rows.push_back(static_cast<int>(d.size()));
+            const std::string disp = (gr->title == "*") ? "root" : gr->title;
+            d.push_back({"\xE2\x94\x80 " + disp, "", "", "", "", "", "", "", ""});
+            for (const auto* c : gr->rows) {
+                if (c->loss_red) loss_rows.push_back(static_cast<int>(d.size()));
+                d.push_back({c->name, c->loss10, c->win, c->total, c->tot,
+                             c->rmin, c->rmean, c->rmax, c->last});
+            }
         }
+        Table t(d);
+        t.SelectAll().Border(LIGHT);
+        t.SelectAll().SeparatorVertical(LIGHT);
+        t.SelectRow(0).Decorate(bold);
+        t.SelectRow(0).Border(LIGHT);
+        for (int lr : label_rows) t.SelectRow(lr).DecorateCells(color(Color::Cyan) | bold);
+        for (int lr : loss_rows)  t.SelectRow(lr).DecorateCells(color(Color::Red));
+        return t.Render();
     };
 
-    for (const auto& g : group_order) {
-        std::vector<const DashCell*> rows;
-        for (auto& c : cells) if (c.group == g) rows.push_back(&c);
-        emit(g, rows);
+    // PINGTRACE_COLS overrides the detected width (piped output / wrong detection).
+    int term_w = Terminal::Size().dimx;
+    if (const char* cw = std::getenv("PINGTRACE_COLS")) { const int v = std::atoi(cw); if (v > 0) term_w = v; }
+    const bool two_col = term_w >= 150 && groups.size() >= 2;
+
+    Element body;
+    if (two_col) {
+        std::vector<const Grp*> left, right;
+        int lcost = 0;
+        for (const auto& gr : groups) {
+            if (lcost >= total_cost / 2) right.push_back(&gr);
+            else { left.push_back(&gr); lcost += gr.cost; }
+        }
+        body = right.empty() ? build_table(left)
+                             : hbox({build_table(left), text("  "), build_table(right)});
+    } else {
+        std::vector<const Grp*> all;
+        for (const auto& gr : groups) all.push_back(&gr);
+        body = build_table(all);
     }
-    std::vector<const DashCell*> other;
-    for (auto& c : cells) if (c.group.empty()) other.push_back(&c);
-    emit("targets", other);
 
-    Table t(d);
-    t.SelectAll().Border(LIGHT);
-    t.SelectAll().SeparatorVertical(LIGHT);   // grid lines between columns
-    t.SelectRow(0).Decorate(bold);
-    t.SelectRow(0).Border(LIGHT);
-    for (int gr : group_rows) t.SelectRow(gr).DecorateCells(color(Color::Cyan) | bold);
-    for (int lr : loss_rows)  t.SelectRow(lr).DecorateCells(color(Color::Red));
-
-    Element doc = vbox({text(header) | bold, t.Render()});
-    auto screen = Screen::Create(Dimension::Full(), Dimension::Fit(doc));
+    Element doc = vbox({text(header) | bold, body});
+    // In a real terminal term_w == the detected width (so this equals Full);
+    // PINGTRACE_COLS lets the override widen the screen too, not just the layout.
+    auto screen = Screen::Create(Dimension::Fixed(term_w), Dimension::Fit(doc));
     Render(screen, doc);
     return screen.ToString();
 }
@@ -478,8 +513,10 @@ int run_prober(const Config& cfg, std::atomic<bool>* stop, uint32_t simulate_gap
             log_warn("cannot resolve '" + send_to + "' for target '" + t.name + "'");
             continue;
         }
+        // Dashboard section: explicit `group`, else the ladder path_group.
+        const std::string dash_group = t.group.empty() ? t.path_group : t.group;
         active.push_back({t.id, t.name, addr, t.proto, t.port, t.interval_ms, t.timeout_ms,
-                          t.ttl, t.path_group, t.hop_index});
+                          t.ttl, dash_group, t.hop_index});
         if (t.ttl != 0) {
             log_info("target '" + t.name + "' -> TTL=" + std::to_string(t.ttl) +
                      " toward " + ipv4_to_string(addr) + " (hop probe)");

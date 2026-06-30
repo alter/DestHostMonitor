@@ -90,6 +90,7 @@ Dependencies (`nlohmann-json`, `zstd`) are pulled by vcpkg on the first build.
 | | `port` | Required for `tcp`. |
 | | `interval_ms` / `timeout_ms` | Optional per-target overrides. |
 | | `path_group` / `hop_index` | Place a target on a named path's ladder at a given hop (see `analyze --ladder`). `path_group: "*"` puts it in **every** ladder — e.g. the gateway as the shared hop 0. |
+| | `group` | Dashboard section this target is shown under (e.g. `hunt`, `tcp`, `icmp`). Falls back to `path_group` when unset, so ladder hops group by their path. Affects the live view only, not `analyze --ladder`. |
 | | `probe` | `false` = ladder label only: never probed (no false 100% loss for hops that ignore ping), but still shown as a `trace` rung and captured by trace-on-event. Default `true`. |
 
 TCP probes connect and measure time to SYN-ACK (open) or RST (closed) — both
@@ -128,6 +129,13 @@ pingtrace live   2026-06-29 13:11:32 UTC   uptime 02:21:29   probes 76407   rtt 
   last probe shows its status (`TIMEOUT`, `UNREACH`, …); no successful samples in
   the window → `-`.
 - Rows with loss in the window are shown in red and marked `<- loss`.
+
+Targets are stacked under cyan `- <group>` label rows (their `group`, else
+`path_group`). On a **wide terminal** (≥150 cols) the groups are split across
+**two bordered tables side by side** so the screen width is used and the list is
+half as tall; on a narrow terminal it falls back to one table. Set
+`PINGTRACE_COLS=<n>` to override the detected width (force one/two columns, or
+fix wrong detection when piped).
 
 The alt-buffer view survives mouse clicks and scrolling, and on `Ctrl+C` it
 restores your previous screen (all history is on disk). When stdout is **piped

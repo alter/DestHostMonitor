@@ -78,6 +78,7 @@ Config load_config(const std::string& path) {
         tg.probe       = t.value("probe", true);
         tg.ttl         = static_cast<uint8_t>(t.value("ttl", 0));
         tg.aim         = t.value("aim", std::string{});
+        tg.group       = t.value("group", std::string{});
         if (tg.ttl != 0 && tg.aim.empty()) {
             throw std::runtime_error("ttl target '" + tg.name + "' requires an 'aim' address");
         }

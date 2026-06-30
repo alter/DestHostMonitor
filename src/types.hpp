@@ -34,6 +34,7 @@ struct Target {
     bool        probe       = true; // false = ladder label only, never probed
     uint8_t     ttl         = 0;  // >0 = TTL-expiry hop probe (aims at `aim`)
     std::string aim;              // where to aim a TTL hop probe (a host past the hop)
+    std::string group;            // dashboard section (falls back to path_group)
 };
 
 constexpr uint16_t kRttNa = 0xFFFF;  // sentinel for "RTT not available"
