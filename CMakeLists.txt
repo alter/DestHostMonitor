@@ -13,6 +13,16 @@ endif()
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(zstd CONFIG REQUIRED)
 
+# FTXUI for the live dashboard (dom + screen only; no interactive event loop).
+include(FetchContent)
+set(FTXUI_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(FTXUI_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+set(FTXUI_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(ftxui
+  GIT_REPOSITORY https://github.com/ArthurSonzogni/FTXUI.git
+  GIT_TAG v5.0.0)
+FetchContent_MakeAvailable(ftxui)
+
 add_executable(pingtrace
   src/main.cpp
   src/cli.cpp
@@ -43,6 +53,8 @@ target_include_directories(pingtrace PRIVATE src)
 target_link_libraries(pingtrace PRIVATE
   nlohmann_json::nlohmann_json
   zstd::libzstd
+  ftxui::screen
+  ftxui::dom
   Iphlpapi
   Ws2_32
 )

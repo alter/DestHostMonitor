@@ -14,6 +14,10 @@
 #include "util/queue.hpp"
 #include "util/time.hpp"
 
+#include "ftxui/dom/elements.hpp"
+#include "ftxui/dom/table.hpp"
+#include "ftxui/screen/screen.hpp"
+
 #include <windows.h>
 #include <io.h>
 
@@ -42,6 +46,8 @@ struct ActiveTarget {
     uint32_t    interval_ms;
     uint32_t    timeout_ms;
     uint8_t     ttl;         // 0 = normal probe; >0 = TTL hop probe
+    std::string path_group;  // for dashboard grouping ("" = ungrouped, "*" = root)
+    int         hop_index;
 };
 
 // A unit of work handed to a worker.
@@ -138,6 +144,61 @@ const char* short_status(Status s) {
     return "?";
 }
 
+// One pre-rendered dashboard row.
+struct DashCell {
+    std::string group;     // "" ungrouped, "*" root
+    int         hop_index = -1;
+    std::string name, loss10, win, total, tot, rmin, rmean, rmax, last;
+    bool        loss_red = false;
+};
+
+// Renders the dashboard as one bordered FTXUI table with group separator rows
+// (compact, so 30+ rows still fit), losing rows in red. Returns the screen text.
+std::string render_ftxui(const std::string& header, std::vector<DashCell>& cells,
+                         const std::vector<std::string>& group_order) {
+    using namespace ftxui;
+    std::vector<std::vector<std::string>> d;
+    d.push_back({"target", "loss(10)", "win%", "total", "tot%", "min", "mean", "max", "last"});
+    std::vector<int> group_rows, loss_rows;
+
+    auto emit = [&](const std::string& title, std::vector<const DashCell*>& rows) {
+        if (rows.empty()) return;
+        std::sort(rows.begin(), rows.end(), [](const DashCell* a, const DashCell* b) {
+            if (a->hop_index != b->hop_index) return a->hop_index < b->hop_index;
+            return a->name < b->name;
+        });
+        group_rows.push_back(static_cast<int>(d.size()));
+        d.push_back({"\xE2\x94\x80 " + (title == "*" ? std::string("root") : title), "", "", "",
+                     "", "", "", "", ""});
+        for (const auto* c : rows) {
+            if (c->loss_red) loss_rows.push_back(static_cast<int>(d.size()));
+            d.push_back({c->name, c->loss10, c->win, c->total, c->tot, c->rmin, c->rmean, c->rmax, c->last});
+        }
+    };
+
+    for (const auto& g : group_order) {
+        std::vector<const DashCell*> rows;
+        for (auto& c : cells) if (c.group == g) rows.push_back(&c);
+        emit(g, rows);
+    }
+    std::vector<const DashCell*> other;
+    for (auto& c : cells) if (c.group.empty()) other.push_back(&c);
+    emit("targets", other);
+
+    Table t(d);
+    t.SelectAll().Border(LIGHT);
+    t.SelectAll().SeparatorVertical(LIGHT);   // grid lines between columns
+    t.SelectRow(0).Decorate(bold);
+    t.SelectRow(0).Border(LIGHT);
+    for (int gr : group_rows) t.SelectRow(gr).DecorateCells(color(Color::Cyan) | bold);
+    for (int lr : loss_rows)  t.SelectRow(lr).DecorateCells(color(Color::Red));
+
+    Element doc = vbox({text(header) | bold, t.Render()});
+    auto screen = Screen::Create(Dimension::Full(), Dimension::Fit(doc));
+    Render(screen, doc);
+    return screen.ToString();
+}
+
 // Writer: drains samples into hourly segments, sealing each at the boundary and
 // on exit, and prints a periodic summary.
 void writer_loop(BlockingQueue<ProbeSample>* samples, const Config* cfg,
@@ -150,10 +211,19 @@ void writer_loop(BlockingQueue<ProbeSample>* samples, const Config* cfg,
     std::vector<AddrEntry> addrs;
     std::map<uint16_t, std::string> name_of;
     std::map<uint16_t, uint32_t> addr_of;
+    std::map<uint16_t, std::string> group_of;   // target id -> path_group ("" if none)
+    std::map<uint16_t, int> hop_of;              // target id -> hop_index
+    std::vector<std::string> group_order;        // distinct path_groups, first-seen order
     for (const auto& a : *active) {
         addrs.push_back({a.id, a.addr, a.name});
         name_of[a.id] = a.name;
         addr_of[a.id] = a.addr;
+        group_of[a.id] = a.path_group;
+        hop_of[a.id] = a.hop_index;
+        if (!a.path_group.empty() &&
+            std::find(group_order.begin(), group_order.end(), a.path_group) == group_order.end()) {
+            group_order.push_back(a.path_group);
+        }
     }
 
     AddressRegistry registry(dir);
@@ -309,28 +379,10 @@ void writer_loop(BlockingQueue<ProbeSample>* samples, const Config* cfg,
             uint64_t total_probes = 0;
             for (const auto& [id, st2] : stats) total_probes += st2.sent;
 
-            const char* eol = tty ? "\x1b[2K" : "";  // erase stale line content
-
-            if (tty) {
-                // Alt-buffer redraw: home, then overwrite every line absolutely.
-                const int up = static_cast<int>((now - writer_start) / 1000.0);
-                std::printf("\x1b[H%spingtrace live   %s UTC   uptime %02d:%02d:%02d   probes %llu   rtt ms   (Ctrl+C to stop)\n",
-                            eol, format_utc_ms(now_utc_ms()).c_str(),
-                            up / 3600, (up % 3600) / 60, up % 60,
-                            static_cast<unsigned long long>(total_probes));
-            } else {
-                std::printf("\n==== %s UTC | window=last %zu probes | tot=since start ====\n",
-                            format_utc_ms(now_utc_ms()).c_str(), kWindowProbes);
-            }
-            // Every column is a fixed-width field; the header and the data rows
-            // use the SAME widths (and `.N` precision caps overflow), so nothing
-            // can ever drift out of alignment.
-            std::printf("%s  %-16.16s %9.9s %7.7s %12.12s %7.7s %8.8s %8.8s %8.8s %8.8s\n",
-                        eol, "target", "loss(10)", "win%", "loss(total)", "tot%",
-                        "min", "mean", "max", "last");
-
+            // Build a row per target once; both renderers share the formatting.
+            std::vector<DashCell> cells;
+            cells.reserve(stats.size());
             for (const auto& [id, st2] : stats) {
-                // Loss + rtt min/mean/max over the sliding window (OK probes only).
                 uint64_t w_sent = st2.win.size(), w_lost = 0;
                 uint32_t rok = 0, rsum = 0, rmin = 0, rmax = 0;
                 for (uint16_t v : st2.win) {
@@ -343,37 +395,52 @@ void writer_loop(BlockingQueue<ProbeSample>* samples, const Config* cfg,
                 const double w_loss = w_sent ? 100.0 * w_lost / w_sent : 0.0;
                 const double c_loss = st2.sent ? 100.0 * st2.lost / st2.sent : 0.0;
 
-                // Pre-render each cell to a string, then print with fixed widths.
-                char c_l10[16], c_wpct[12], c_tot[24], c_tpct[12];
-                char cmin[10], cmean[10], cmax[10], clast[12];
-                std::snprintf(c_l10, sizeof(c_l10), "%llu/%llu",
-                              static_cast<unsigned long long>(w_lost),
-                              static_cast<unsigned long long>(w_sent));
-                std::snprintf(c_wpct, sizeof(c_wpct), "%.1f%%", w_loss);
-                std::snprintf(c_tot, sizeof(c_tot), "%llu/%llu",
-                              static_cast<unsigned long long>(st2.lost),
-                              static_cast<unsigned long long>(st2.sent));
-                std::snprintf(c_tpct, sizeof(c_tpct), "%.1f%%", c_loss);
+                char buf[24];
+                DashCell c;
+                c.group     = group_of.count(id) ? group_of[id] : std::string();
+                c.hop_index = hop_of.count(id) ? hop_of[id] : -1;
+                c.name      = name_of.count(id) ? name_of[id] : std::string();
+                std::snprintf(buf, sizeof(buf), "%llu/%llu",
+                              (unsigned long long)w_lost, (unsigned long long)w_sent); c.loss10 = buf;
+                std::snprintf(buf, sizeof(buf), "%.1f%%", w_loss); c.win = buf;
+                std::snprintf(buf, sizeof(buf), "%llu/%llu",
+                              (unsigned long long)st2.lost, (unsigned long long)st2.sent); c.total = buf;
+                std::snprintf(buf, sizeof(buf), "%.1f%%", c_loss); c.tot = buf;
                 if (rok) {
-                    std::snprintf(cmin,  sizeof(cmin),  "%.1f", rmin / 10.0);
-                    std::snprintf(cmean, sizeof(cmean), "%.1f", (rsum / static_cast<double>(rok)) / 10.0);
-                    std::snprintf(cmax,  sizeof(cmax),  "%.1f", rmax / 10.0);
-                } else {
-                    std::snprintf(cmin, sizeof(cmin), "-");
-                    std::snprintf(cmean, sizeof(cmean), "-");
-                    std::snprintf(cmax, sizeof(cmax), "-");
-                }
-                if (st2.rtt == kRttNa) std::snprintf(clast, sizeof(clast), "%s", short_status(st2.last));
-                else std::snprintf(clast, sizeof(clast), "%.1f", st2.rtt / 10.0);
-
-                const char* color = (tty && w_loss > 0.0) ? "\x1b[31m" : "";
-                const char* reset = (tty && w_loss > 0.0) ? "\x1b[0m" : "";
-                std::printf("%s  %s%-16.16s %9.9s %7.7s %12.12s %7.7s %8.8s %8.8s %8.8s %8.8s%s%s\n",
-                            eol, color, name_of[id].c_str(),
-                            c_l10, c_wpct, c_tot, c_tpct, cmin, cmean, cmax, clast,
-                            (w_loss > 0.0 ? "  <- loss" : ""), reset);
+                    std::snprintf(buf, sizeof(buf), "%.1f", rmin / 10.0); c.rmin = buf;
+                    std::snprintf(buf, sizeof(buf), "%.1f", (rsum / (double)rok) / 10.0); c.rmean = buf;
+                    std::snprintf(buf, sizeof(buf), "%.1f", rmax / 10.0); c.rmax = buf;
+                } else { c.rmin = "-"; c.rmean = "-"; c.rmax = "-"; }
+                if (st2.rtt == kRttNa) c.last = short_status(st2.last);
+                else { std::snprintf(buf, sizeof(buf), "%.1f", st2.rtt / 10.0); c.last = buf; }
+                c.loss_red = w_loss > 0.0;
+                cells.push_back(std::move(c));
             }
-            if (tty) std::printf("\x1b[J");  // clear anything below the block
+
+            if (tty) {
+                const int up = static_cast<int>((now - writer_start) / 1000.0);
+                char hdr[160];
+                std::snprintf(hdr, sizeof(hdr),
+                    "pingtrace live   %s UTC   uptime %02d:%02d:%02d   probes %llu   (rtt ms, Ctrl+C to stop)",
+                    format_utc_ms(now_utc_ms()).c_str(), up / 3600, (up % 3600) / 60, up % 60,
+                    (unsigned long long)total_probes);
+                const std::string frame = render_ftxui(hdr, cells, group_order);
+                std::printf("\x1b[H");
+                std::fwrite(frame.data(), 1, frame.size(), stdout);
+                std::printf("\x1b[J");  // clear anything below the frame
+            } else {
+                std::printf("\n==== %s UTC | window=last %zu probes | tot=since start ====\n",
+                            format_utc_ms(now_utc_ms()).c_str(), kWindowProbes);
+                std::printf("  %-16.16s %9.9s %7.7s %12.12s %7.7s %8.8s %8.8s %8.8s %8.8s\n",
+                            "target", "loss(10)", "win%", "loss(total)", "tot%",
+                            "min", "mean", "max", "last");
+                for (const auto& c : cells) {
+                    std::printf("  %-16.16s %9.9s %7.7s %12.12s %7.7s %8.8s %8.8s %8.8s %8.8s%s\n",
+                                c.name.c_str(), c.loss10.c_str(), c.win.c_str(), c.total.c_str(),
+                                c.tot.c_str(), c.rmin.c_str(), c.rmean.c_str(), c.rmax.c_str(),
+                                c.last.c_str(), c.loss_red ? "  <- loss" : "");
+                }
+            }
             std::fflush(stdout);
             last_render = now;
         }
@@ -411,7 +478,8 @@ int run_prober(const Config& cfg, std::atomic<bool>* stop, uint32_t simulate_gap
             log_warn("cannot resolve '" + send_to + "' for target '" + t.name + "'");
             continue;
         }
-        active.push_back({t.id, t.name, addr, t.proto, t.port, t.interval_ms, t.timeout_ms, t.ttl});
+        active.push_back({t.id, t.name, addr, t.proto, t.port, t.interval_ms, t.timeout_ms,
+                          t.ttl, t.path_group, t.hop_index});
         if (t.ttl != 0) {
             log_info("target '" + t.name + "' -> TTL=" + std::to_string(t.ttl) +
                      " toward " + ipv4_to_string(addr) + " (hop probe)");
