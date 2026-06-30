@@ -68,9 +68,17 @@ Write-Host "Window : $(Ms-ToLocal $fromMs) .. $(Ms-ToLocal $toMs) (local)"
 Write-Host "Output : $out"
 
 # --- 1) human-readable report --------------------------------------------------
+$rep = Join-Path $out "report.txt"
+"==== OUTAGE DISTRIBUTION (interruptions / duration / hour-of-day) ====" | Out-File $rep -Encoding utf8
+$statsScript = Join-Path $root "outage_stats.ps1"
+if (Test-Path $statsScript) {
+  (& $statsScript -Config $cfgPath -From $From -To $To) | Out-File $rep -Encoding utf8 -Append
+}
+"" | Out-File $rep -Encoding utf8 -Append
+"==== PER-TARGET SUMMARY / LOSS-BY-HOUR / HEATMAP / PATH LADDERS ====" | Out-File $rep -Encoding utf8 -Append
 & $exe analyze --config $cfgPath --from $From --to $To --by-hour --heatmap --ladder 2>$null |
-  Out-File -FilePath (Join-Path $out "report.txt") -Encoding utf8
-Write-Host "  report.txt"
+  Out-File $rep -Encoding utf8 -Append
+Write-Host "  report.txt (outage distribution + analyze)"
 
 # --- 2) outages in the window --------------------------------------------------
 $eventsSrc = Join-Path $dataDir "events.csv"

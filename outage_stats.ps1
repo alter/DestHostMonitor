@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Distribution of network interruptions from pingtrace events.csv.
   Clusters simultaneous per-target outages into episodes (one uplink drop =
@@ -20,11 +20,12 @@ $root = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
 $cfgPath = if ([IO.Path]::IsPathRooted($Config)) { $Config } else { Join-Path $root $Config }
 $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
 $events = Join-Path $cfg.storage.dir "events.csv"
-if (-not (Test-Path $events)) { Write-Host "no events.csv at $events"; return }
+if (-not (Test-Path $events)) { Write-Output "no events.csv at $events"; return }
 
 $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
 function To-Ms([string]$s){
   if ([string]::IsNullOrWhiteSpace($s)) { return $null }
+  if ($s -eq 'now') { return $now }
   if ($s -match '^\s*(\d+)\s*([dh])\s*$'){ $n=[long]$Matches[1]; if($Matches[2] -eq 'd'){return $now-$n*86400000}else{return $now-$n*3600000} }
   return [DateTimeOffset]::new([DateTime]::Parse($s)).ToUnixTimeMilliseconds()
 }
@@ -35,17 +36,17 @@ $rows = Import-Csv $events | Where-Object {
   ($null -eq $toMs   -or [long]$_.start_utc -le $toMs)
 } | Sort-Object { [long]$_.start_utc }
 
-if (-not $rows) { Write-Host "no events in range"; return }
+if (-not $rows) { Write-Output "no events in range"; return }
 
 # data span + raw counts
 $first = [long]$rows[0].start_utc
 $last  = [long]$rows[-1].start_utc
 $byType = $rows | Group-Object type | ForEach-Object { "$($_.Name)=$($_.Count)" }
-Write-Host ""
-Write-Host ("Logs span : {0} .. {1} (local)" -f
+Write-Output ""
+Write-Output ("Logs span : {0} .. {1} (local)" -f
   ([DateTimeOffset]::FromUnixTimeMilliseconds($first).LocalDateTime.ToString("yyyy-MM-dd HH:mm")),
   ([DateTimeOffset]::FromUnixTimeMilliseconds($last ).LocalDateTime.ToString("yyyy-MM-dd HH:mm")))
-Write-Host ("Raw events: {0}  ({1})" -f $rows.Count, ($byType -join ', '))
+Write-Output ("Raw events: {0}  ({1})" -f $rows.Count, ($byType -join ', '))
 
 # cluster into episodes by start-time proximity
 $episodes = New-Object System.Collections.Generic.List[object]
@@ -68,17 +69,17 @@ $durs = $episodes | ForEach-Object { [math]::Round((($_.end - $_.start)/1000.0),
 $sorted = $durs | Sort-Object
 function Pctl($a,$p){ if(-not $a){return 0}; $i=[int][math]::Floor($p*($a.Count-1)); $a[$i] }
 
-Write-Host ""
-Write-Host ("Distinct interruptions (episodes, gap<=${GapSec}s): {0}" -f $episodes.Count)
+Write-Output ""
+Write-Output ("Distinct interruptions (episodes, gap<=${GapSec}s): {0}" -f $episodes.Count)
 $wide = ($episodes | Where-Object { $_.targets.Count -ge 5 }).Count
-Write-Host ("  of them widespread (>=5 targets at once): {0}" -f $wide)
+Write-Output ("  of them widespread (>=5 targets at once): {0}" -f $wide)
 $sumS = ($durs | Measure-Object -Sum).Sum
-Write-Host ("  total downtime: {0:N0} s (~{1:N1} min)   median {2}s  p90 {3}s  max {4}s" -f
+Write-Output ("  total downtime: {0:N0} s (~{1:N1} min)   median {2}s  p90 {3}s  max {4}s" -f
   $sumS, ($sumS/60), (Pctl $sorted 0.5), (Pctl $sorted 0.9), ($sorted[-1]))
 
 # duration buckets
-Write-Host ""
-Write-Host "Duration distribution:"
+Write-Output ""
+Write-Output "Duration distribution:"
 $buckets = [ordered]@{ "<5s"=0; "5-15s"=0; "15-30s"=0; "30-60s"=0; "1-5m"=0; ">5m"=0 }
 foreach ($d in $durs) {
   if     ($d -lt 5)   { $buckets["<5s"]++ }
@@ -94,8 +95,8 @@ foreach ($k in $buckets.Keys) {
 }
 
 # by hour of day (local)
-Write-Host ""
-Write-Host "By hour of day (local) - when interruptions start:"
+Write-Output ""
+Write-Output "By hour of day (local) - when interruptions start:"
 $hours = New-Object int[] 24
 foreach ($ep in $episodes) {
   $h = [DateTimeOffset]::FromUnixTimeMilliseconds($ep.start).LocalDateTime.Hour
@@ -106,4 +107,5 @@ for ($h=0; $h -lt 24; $h++) {
   $n=$hours[$h]; $bar = '#' * [int]([math]::Round( ($(if($maxH){$n/$maxH}else{0})) * 40 ))
   "  {0:00}:00 {1,4}  {2}" -f $h, $n, $bar
 }
-Write-Host ""
+Write-Output ""
+
