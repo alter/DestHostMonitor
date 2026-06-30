@@ -92,9 +92,13 @@ void EventDetector::add(const ProbeSample& s) {
         st.start     = st.cand_start;
         st.sent      = static_cast<uint64_t>(st.consec);  // the threshold probes, all failures
         st.lost      = static_cast<uint64_t>(st.consec);
-        // If every target is failing at once, the fault is local (our channel
-        // or the monitor), not the individual host.
-        st.type      = (total_targets_ > 1 && count_failing() >= total_targets_) ? "local" : "host";
+        // If a large fraction of all targets is failing at once, the fault is
+        // shared (our uplink / monitor), not the individual host. We don't
+        // require literally ALL targets: the LAN gateway (and other near hops)
+        // usually stay up during an uplink drop, so >=75% simultaneous is local.
+        const bool widespread =
+            total_targets_ > 2 && count_failing() * 100 >= total_targets_ * 75;
+        st.type      = widespread ? "local" : "host";
         st.trace_ref.clear();
         if (cfg_.trigger_traceroute) {
             st.trace_ref = "traces/" + std::to_string(st.start) + "_" +
