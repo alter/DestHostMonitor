@@ -25,8 +25,12 @@ public:
 
     bool valid() const;
 
-    // Sends one echo to dest (IPv4, network order) and blocks up to timeout_ms.
-    ProbeResult ping(uint32_t dest, uint32_t timeout_ms);
+    // Sends one echo to dest (IPv4, network order) with the given TTL and blocks
+    // up to timeout_ms. For a hop probe (TTL chosen so the packet expires at an
+    // intermediate router), set hop_probe=true: a Time-Exceeded reply then counts
+    // as "reachable" (Ok + RTT), and src_addr carries which router answered.
+    ProbeResult ping(uint32_t dest, uint32_t timeout_ms, uint8_t ttl = 128,
+                     bool hop_probe = false);
 
 private:
     void* handle_;  // HANDLE from IcmpCreateFile (INVALID_HANDLE_VALUE if open failed)

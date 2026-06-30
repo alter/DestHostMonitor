@@ -77,7 +77,7 @@ bool IcmpProbe::valid() const {
     return handle_ != INVALID_HANDLE_VALUE && handle_ != nullptr;
 }
 
-ProbeResult IcmpProbe::ping(uint32_t dest, uint32_t timeout_ms) {
+ProbeResult IcmpProbe::ping(uint32_t dest, uint32_t timeout_ms, uint8_t ttl, bool hop_probe) {
     ProbeResult out;
     if (!valid()) {
         out.status = Status::SendErr;
@@ -91,7 +91,7 @@ ProbeResult IcmpProbe::ping(uint32_t dest, uint32_t timeout_ms) {
     std::array<unsigned char, kReplySize> reply{};
 
     IP_OPTION_INFORMATION opts{};
-    opts.Ttl = 128;
+    opts.Ttl = ttl ? ttl : 128;
 
     const DWORD n = IcmpSendEcho2(
         handle_, /*Event*/ nullptr, /*ApcRoutine*/ nullptr, /*ApcContext*/ nullptr,
@@ -108,15 +108,33 @@ ProbeResult IcmpProbe::ping(uint32_t dest, uint32_t timeout_ms) {
     }
 
     const auto* r = reinterpret_cast<const ICMP_ECHO_REPLY*>(reply.data());
+    const auto rtt_tenths = [&] {
+        const ULONG tenths = r->RoundTripTime * 10;
+        return (tenths >= kRttNa) ? static_cast<uint16_t>(kRttNa - 1)
+                                  : static_cast<uint16_t>(tenths);
+    };
+
+    if (hop_probe) {
+        // A hop probe wants the router at this TTL to reply Time-Exceeded; that
+        // (or actually reaching the aim) means the hop is reachable.
+        out.reply_ttl = r->Options.Ttl;
+        out.src_addr  = r->Address;  // which router answered (route change visible)
+        if (r->Status == IP_TTL_EXPIRED_TRANSIT || r->Status == IP_TTL_EXPIRED_REASSEM ||
+            r->Status == IP_SUCCESS) {
+            out.status = Status::Ok;
+            out.rtt_tenths_ms = rtt_tenths();
+        } else {
+            out.status = map_ip_status(r->Status);  // unreachable etc. = real problem
+        }
+        return out;
+    }
+
     out.status = map_ip_status(r->Status);
     out.reply_ttl = r->Options.Ttl;
     out.src_addr = r->Address;  // responder address (target on success, router on error)
 
     if (out.status == Status::Ok) {
-        // RoundTripTime is whole milliseconds; store as 0.1 ms units (clamped).
-        const ULONG tenths = r->RoundTripTime * 10;
-        out.rtt_tenths_ms = (tenths >= kRttNa) ? (kRttNa - 1)
-                                               : static_cast<uint16_t>(tenths);
+        out.rtt_tenths_ms = rtt_tenths();
         out.src_addr = 0;  // success: source is the target itself, not a router
     }
     return out;

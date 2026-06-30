@@ -36,11 +36,12 @@ namespace {
 struct ActiveTarget {
     uint16_t    id;
     std::string name;
-    uint32_t    addr;        // IPv4 network order
+    uint32_t    addr;        // IPv4 network order (the aim, for a TTL hop probe)
     Proto       proto;
     uint16_t    port;
     uint32_t    interval_ms;
     uint32_t    timeout_ms;
+    uint8_t     ttl;         // 0 = normal probe; >0 = TTL hop probe
 };
 
 // A unit of work handed to a worker.
@@ -50,6 +51,7 @@ struct Job {
     Proto    proto;
     uint16_t port;
     uint32_t timeout_ms;
+    uint8_t  ttl;
 };
 
 // A trace-on-event request handed to the trace thread.
@@ -73,7 +75,8 @@ void worker_loop(BlockingQueue<Job>* jobs, BlockingQueue<ProbeSample>* samples) 
         if (job->proto == Proto::Tcp) {
             s.result = tcp_ping(job->addr, job->port, job->timeout_ms);
         } else {
-            s.result = probe.ping(job->addr, job->timeout_ms);
+            const uint8_t ttl = job->ttl ? job->ttl : 128;
+            s.result = probe.ping(job->addr, job->timeout_ms, ttl, job->ttl != 0);
         }
         s.utc_ms = now_utc_ms();
         samples->push(s);
@@ -400,15 +403,23 @@ int run_prober(const Config& cfg, std::atomic<bool>* stop, uint32_t simulate_gap
             log_info("ladder-only target '" + t.name + "' (probe:false), not probed");
             continue;
         }
-        const uint32_t addr = resolve_ipv4(t.address);
+        // A TTL hop probe aims at `aim` (a host past the hop); the packet expires
+        // on the intermediate router we want to watch.
+        const std::string send_to = (t.ttl != 0) ? t.aim : t.address;
+        const uint32_t addr = resolve_ipv4(send_to);
         if (addr == 0) {
-            log_warn("cannot resolve '" + t.address + "' for target '" + t.name + "'");
+            log_warn("cannot resolve '" + send_to + "' for target '" + t.name + "'");
             continue;
         }
-        active.push_back({t.id, t.name, addr, t.proto, t.port, t.interval_ms, t.timeout_ms});
-        const char* proto = (t.proto == Proto::Tcp) ? "tcp" : "icmp";
-        log_info("target '" + t.name + "' -> " + ipv4_to_string(addr) + " (" + proto +
-                 (t.proto == Proto::Tcp ? ":" + std::to_string(t.port) : "") + ")");
+        active.push_back({t.id, t.name, addr, t.proto, t.port, t.interval_ms, t.timeout_ms, t.ttl});
+        if (t.ttl != 0) {
+            log_info("target '" + t.name + "' -> TTL=" + std::to_string(t.ttl) +
+                     " toward " + ipv4_to_string(addr) + " (hop probe)");
+        } else {
+            const char* proto = (t.proto == Proto::Tcp) ? "tcp" : "icmp";
+            log_info("target '" + t.name + "' -> " + ipv4_to_string(addr) + " (" + proto +
+                     (t.proto == Proto::Tcp ? ":" + std::to_string(t.port) : "") + ")");
+        }
     }
     if (active.empty()) {
         log_error("no probeable targets");
@@ -469,7 +480,7 @@ int run_prober(const Config& cfg, std::atomic<bool>* stop, uint32_t simulate_gap
         sched.collect_due(now, due);
         for (size_t idx : due) {
             const auto& a = active[idx];
-            jobs.push(Job{a.id, a.addr, a.proto, a.port, a.timeout_ms});
+            jobs.push(Job{a.id, a.addr, a.proto, a.port, a.timeout_ms, a.ttl});
         }
 
         double wait = sched.earliest() - mono_ms();
