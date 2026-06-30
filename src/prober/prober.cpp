@@ -202,6 +202,8 @@ std::string render_ftxui(const std::string& header, std::vector<DashCell>& cells
         t.SelectRow(0).Border(LIGHT);
         for (int lr : label_rows) t.SelectRow(lr).DecorateCells(color(Color::Cyan) | bold);
         for (int lr : loss_rows)  t.SelectRow(lr).DecorateCells(color(Color::Red));
+        // Let cells grow horizontally so the grid stretches to fill the width.
+        t.SelectAll().DecorateCells(xflex);
         return t.Render();
     };
 
@@ -218,12 +220,13 @@ std::string render_ftxui(const std::string& header, std::vector<DashCell>& cells
             if (lcost >= total_cost / 2) right.push_back(&gr);
             else { left.push_back(&gr); lcost += gr.cost; }
         }
-        body = right.empty() ? build_table(left)
-                             : hbox({build_table(left), text("  "), build_table(right)});
+        body = right.empty() ? (build_table(left) | xflex)
+                             : hbox({build_table(left) | xflex, text("  "),
+                                     build_table(right) | xflex});
     } else {
         std::vector<const Grp*> all;
         for (const auto& gr : groups) all.push_back(&gr);
-        body = build_table(all);
+        body = build_table(all) | xflex;
     }
 
     Element doc = vbox({text(header) | bold, body});
