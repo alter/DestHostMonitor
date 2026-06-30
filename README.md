@@ -121,6 +121,29 @@ TCP probes connect and measure time to SYN-ACK (open) or RST (closed) — both
 mean the host responded. Useful when routers deprioritize ICMP: probe the real
 service port instead.
 
+### Probe frequency & rate limits
+
+`interval_ms` is per target (with a `defaults` fallback). One probe per second to
+a destination is ordinary `ping` territory — not abusive — and the scheduler
+**phase-spreads** probe starts across the interval, so packets never leave in a
+burst. Two things are still worth tuning, and both make the data *more* credible:
+
+- **Router / TTL hops are rate-limited.** Routers cap how fast they generate ICMP
+  — both `time exceeded` (what TTL probes rely on) and echo-replies to their own
+  address — typically to ~1/s. Probing such a hop at 1/s sits right on that limit
+  and records **false** loss an ISP can wave away as "you hit our rate limiter."
+  Slow control-plane hops to `interval_ms: 3000` (≈0.33/s) for clean data.
+- **TCP to sensitive services.** A full connect every second to SSH (22) or a
+  game port can trip fail2ban / connection-rate alarms and get your monitoring IP
+  banned. Slow those to `interval_ms: 5000`.
+
+Keep **data-plane** probes fast (1000 ms) — ICMP to real hosts and TCP to `:443`
+are *forwarded*, not rate-limited, so loss there is real loss (your strongest
+evidence) and a tight interval pins outage onset precisely. A worked split for a
+~30-target setup: ~18 data-plane targets at 1 s, ~13 router/ladder hops at 3 s,
+a few SSH/game ports at 5 s → ~23 packets/s total (~1.6 KB/s), with every router
+probed at ≈0.33/s, safely under its limiter.
+
 ## Quick start
 
 ```
