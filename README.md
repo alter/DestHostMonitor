@@ -1,6 +1,7 @@
 # pingtrace
 
-<img width="921" height="251" alt="image" src="https://github.com/user-attachments/assets/fcc177dc-b72f-4f97-bf1f-572cde8467b6" />
+<img width="1126" height="907" alt="image" src="https://github.com/user-attachments/assets/9bedce8c-016d-490b-8f22-12d4281f2352" />
+
 
 
 Continuous reachability prober for Windows. It probes a list of hosts (ICMP or
