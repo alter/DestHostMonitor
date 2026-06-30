@@ -69,12 +69,34 @@ Dependencies (`nlohmann-json`, `zstd`) are pulled by vcpkg on the first build.
   "defaults": { "interval_ms": 1000, "timeout_ms": 1500 },
   "events": { "fail_threshold": 3, "min_outage_ms": 2000, "trigger_traceroute": true },
   "targets": [
-    { "name": "cloudflare", "address": "1.1.1.1", "proto": "icmp" },
-    { "name": "bybit", "address": "api.bybit.com", "proto": "tcp", "port": 443 },
-    { "name": "isp-hop1", "address": "10.0.0.1", "proto": "icmp", "path_group": "bybit", "hop_index": 1 }
+    { "name": "gateway",    "address": "192.168.0.1",   "proto": "icmp", "path_group": "*",   "hop_index": 0 },
+    { "name": "isp-hop1",   "address": "10.0.0.1",      "proto": "icmp", "path_group": "wan", "hop_index": 1, "ttl": 1, "aim": "8.8.8.8" },
+    { "name": "isp-core",   "address": "100.64.0.1",    "proto": "icmp", "path_group": "wan", "hop_index": 2 },
+    { "name": "ix-peer",    "address": "80.249.208.1",  "proto": "icmp", "path_group": "wan", "hop_index": 3 },
+
+    { "name": "cloudflare", "address": "1.1.1.1",       "proto": "icmp", "group": "dns" },
+    { "name": "google-dns", "address": "8.8.8.8",       "proto": "icmp", "group": "dns" },
+
+    { "name": "api",        "address": "api.bybit.com", "proto": "icmp", "group": "api" },
+    { "name": "api-tcp",    "address": "api.bybit.com", "proto": "tcp", "port": 443, "group": "api" }
   ]
 }
 ```
+
+What this config actually buys you:
+
+- **`gateway`** is hop 0 of **every** ladder (`path_group: "*"`) — your LAN
+  baseline. Loss that appears *past* it while it stays clean is upstream of you,
+  not your equipment.
+- **`isp-hop1` / `isp-core` / `ix-peer`** are the `wan` path hop by hop.
+  `isp-hop1` is a **TTL-expiry probe** (`ttl: 1` aimed at `8.8.8.8`): it measures
+  a router that ignores pings to itself by reading its `time exceeded` reply.
+  `analyze --ladder` walks these in `hop_index` order to show where loss first
+  climbs — i.e. *which* hop is dropping.
+- **`cloudflare` / `google-dns`** share the `dns` dashboard section; **`api`** and
+  **`api-tcp`** hit the same host over ICMP **and** TCP side by side in the `api`
+  section. TCP loss is data-plane loss — it can't be waved away as "they just
+  deprioritize ping."
 
 | Section | Field | Meaning |
 |---|---|---|
@@ -91,6 +113,7 @@ Dependencies (`nlohmann-json`, `zstd`) are pulled by vcpkg on the first build.
 | | `port` | Required for `tcp`. |
 | | `interval_ms` / `timeout_ms` | Optional per-target overrides. |
 | | `path_group` / `hop_index` | Place a target on a named path's ladder at a given hop (see `analyze --ladder`). `path_group: "*"` puts it in **every** ladder — e.g. the gateway as the shared hop 0. |
+| | `ttl` / `aim` | Make this a **TTL-expiry hop probe**: send an ICMP echo toward `aim` with `TTL=ttl` and time the `time exceeded` reply from the router that hop falls on (its IP is `address`). Lets you measure intermediate ISP routers that drop pings addressed to themselves. Requires `aim`. |
 | | `group` | Dashboard section this target is shown under (e.g. `hunt`, `tcp`, `icmp`). Falls back to `path_group` when unset, so ladder hops group by their path. Affects the live view only, not `analyze --ladder`. |
 | | `probe` | `false` = ladder label only: never probed (no false 100% loss for hops that ignore ping), but still shown as a `trace` rung and captured by trace-on-event. Default `true`. |
 

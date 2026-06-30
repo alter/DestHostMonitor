@@ -14,10 +14,15 @@
     "trigger_traceroute": true
   },
   "targets": [
-    { "name": "gateway",    "address": "192.168.0.1",  "proto": "icmp", "path_group": "*",   "hop_index": 0 },
-    { "name": "isp-hop1",   "address": "10.0.0.1",     "proto": "icmp", "path_group": "wan", "hop_index": 1 },
-    { "name": "cloudflare", "address": "1.1.1.1",      "proto": "icmp", "group": "icmp" },
-    { "name": "google-dns", "address": "8.8.8.8",      "proto": "icmp", "group": "icmp" },
-    { "name": "api",        "address": "api.bybit.com", "proto": "tcp", "port": 443, "group": "tcp" }
+    { "name": "gateway",    "address": "192.168.0.1",   "proto": "icmp", "path_group": "*",   "hop_index": 0 },
+    { "name": "isp-hop1",   "address": "10.0.0.1",      "proto": "icmp", "path_group": "wan", "hop_index": 1, "ttl": 1, "aim": "8.8.8.8" },
+    { "name": "isp-core",   "address": "100.64.0.1",    "proto": "icmp", "path_group": "wan", "hop_index": 2 },
+    { "name": "ix-peer",    "address": "80.249.208.1",  "proto": "icmp", "path_group": "wan", "hop_index": 3 },
+
+    { "name": "cloudflare", "address": "1.1.1.1",       "proto": "icmp", "group": "dns" },
+    { "name": "google-dns", "address": "8.8.8.8",       "proto": "icmp", "group": "dns" },
+
+    { "name": "api",        "address": "api.bybit.com", "proto": "icmp", "group": "api" },
+    { "name": "api-tcp",    "address": "api.bybit.com", "proto": "tcp", "port": 443, "group": "api" }
   ]
 }
