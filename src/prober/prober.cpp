@@ -145,6 +145,9 @@ const char* short_status(Status s) {
     return "?";
 }
 
+// Sliding-window length for the live dashboard's loss(N)/loss% and rtt columns.
+constexpr size_t kWindowProbes = 100;
+
 // One pre-rendered dashboard row.
 struct DashCell {
     std::string group;     // "" ungrouped, "*" root
@@ -183,7 +186,8 @@ std::string render_ftxui(const std::string& header, std::vector<DashCell>& cells
     // One bordered table built from a list of groups (label rows cyan, loss red).
     auto build_table = [](const std::vector<const Grp*>& grps) -> Element {
         std::vector<std::vector<std::string>> d;
-        d.push_back({"target", "loss(10)", "loss%", "total", "tot%", "min", "mean", "max", "last"});
+        d.push_back({"target", "loss(" + std::to_string(kWindowProbes) + ")", "loss%",
+                     "total", "tot%", "min", "mean", "max", "last"});
         std::vector<int> label_rows, loss_rows;
         for (const auto* gr : grps) {
             label_rows.push_back(static_cast<int>(d.size()));
@@ -295,10 +299,9 @@ void writer_loop(BlockingQueue<ProbeSample>* samples, const Config* cfg,
     uint64_t cur_end  = seg.start_utc_ms() + seg_ms;
     uint64_t last_utc = seg.start_utc_ms();
 
-    // Sliding window over the LAST N probes per target (shifts by one each probe:
-    // 1..10, then 2..11, ...). Stores each probe's RTT (kRttNa = that probe
-    // failed), so loss and rtt min/mean/max all derive from the same window.
-    constexpr size_t kWindowProbes = 10;
+    // Sliding window over the LAST kWindowProbes probes per target (shifts by one
+    // each probe: 1..N, then 2..N+1, ...). Stores each probe's RTT (kRttNa = that
+    // probe failed), so loss and rtt min/mean/max all derive from the same window.
     struct Stat {
         uint64_t             sent = 0, lost = 0;
         Status               last = Status::Timeout;
@@ -469,8 +472,9 @@ void writer_loop(BlockingQueue<ProbeSample>* samples, const Config* cfg,
             } else {
                 std::printf("\n==== %s UTC | window=last %zu probes | tot=since start ====\n",
                             format_utc_ms(now_utc_ms()).c_str(), kWindowProbes);
+                const std::string wlabel = "loss(" + std::to_string(kWindowProbes) + ")";
                 std::printf("  %-16.16s %9.9s %7.7s %12.12s %7.7s %8.8s %8.8s %8.8s %8.8s\n",
-                            "target", "loss(10)", "loss%", "loss(total)", "tot%",
+                            "target", wlabel.c_str(), "loss%", "loss(total)", "tot%",
                             "min", "mean", "max", "last");
                 for (const auto& c : cells) {
                     std::printf("  %-16.16s %9.9s %7.7s %12.12s %7.7s %8.8s %8.8s %8.8s %8.8s%s\n",

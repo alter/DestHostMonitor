@@ -18,7 +18,7 @@ say afterwards *when* it broke, *how long*, *how often*, and *at which hop*.
 ## Highlights
 
 - **ICMP and TCP probing**, per-target interval/timeout, no admin rights needed.
-- **Live dashboard** that redraws in place with a sliding window of the last 10
+- **Live dashboard** that redraws in place with a sliding window of the last 100
   probes per target: loss and RTT min/mean/max/last, losing rows flagged in red.
 - **Compact storage**: 12-byte raw records, hourly segments sealed with zstd
   (~3x), plus per-minute rollups kept forever. ~10 hosts ≈ tens of MB/year.
@@ -141,25 +141,25 @@ grouped under cyan `- <group>` label rows and losing rows in red:
 
 ```
 pingtrace live   2026-06-30 16:08:22 UTC   uptime 02:21:29   probes 76407   (rtt ms, Ctrl+C to stop)
-┌─────────────┬────────┬──────┬───────────┬──────┬───────┬───────┬───────┬───────┐
-│target       │loss(10)│loss% │total      │tot%  │min    │mean   │max    │last   │
-├─────────────┼────────┼──────┼───────────┼──────┼───────┼───────┼───────┼───────┤
-│─ root       │        │      │           │      │       │       │       │       │
-│home-router  │0/10    │0.0%  │151/76407  │0.20% │1.0    │4.0    │71.0   │3.0    │
-│─ trunk      │        │      │           │      │       │       │       │       │
-│trunk-h1-gw  │0/10    │0.0%  │92/76401   │0.12% │2.0    │5.5    │23.0   │7.0    │
-│─ icmp       │        │      │           │      │       │       │       │       │
-│cloudflare   │0/10    │0.0%  │1129/76407 │1.48% │52.0   │58.3   │152.0  │60.0   │
-│hk           │3/10    │30.0% │1476/76407 │1.93% │234.0  │256.6  │466.0  │237.0  │
-└─────────────┴────────┴──────┴───────────┴──────┴───────┴───────┴───────┴───────┘
+┌─────────────┬─────────┬──────┬───────────┬──────┬───────┬───────┬───────┬───────┐
+│target       │loss(100)│loss% │total      │tot%  │min    │mean   │max    │last   │
+├─────────────┼─────────┼──────┼───────────┼──────┼───────┼───────┼───────┼───────┤
+│─ root       │         │      │           │      │       │       │       │       │
+│home-router  │0/100    │0.0%  │151/76407  │0.20% │1.0    │4.0    │71.0   │3.0    │
+│─ trunk      │         │      │           │      │       │       │       │       │
+│trunk-h1-gw  │0/100    │0.0%  │92/76401   │0.12% │2.0    │5.5    │23.0   │7.0    │
+│─ icmp       │         │      │           │      │       │       │       │       │
+│cloudflare   │0/100    │0.0%  │1129/76407 │1.48% │52.0   │58.3   │152.0  │60.0   │
+│hk           │12/100   │12.0% │1476/76407 │1.93% │234.0  │256.6  │466.0  │237.0  │
+└─────────────┴─────────┴──────┴───────────┴──────┴───────┴───────┴───────┴───────┘
 ```
 
 (the `hk` row is red; the `- root` / `- trunk` / `- icmp` label rows are cyan)
 
-- `loss(10)` / `loss%` — failures over a **sliding window of the last 10 probes**
-  per target (1‑10, then 2‑11, …) as a count and that window's loss %.
+- `loss(100)` / `loss%` — failures over a **sliding window of the last 100 probes**
+  per target (1‑100, then 2‑101, …) as a count and that window's loss %.
 - `total` / `tot%` — totals since the process started.
-- `min / mean / max / last` — RTT (ms) over the same 10‑probe window. A failed
+- `min / mean / max / last` — RTT (ms) over the same 100‑probe window. A failed
   last probe shows its status (`TIMEOUT`, `UNREACH`, …); no successful samples in
   the window → `-`.
 - Rows with loss in the window are shown in red. (The piped/plain view has no
