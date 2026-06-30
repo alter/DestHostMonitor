@@ -113,30 +113,41 @@ pingtrace run [--config <path>] [--duration <seconds>]
 ```
 
 In an interactive terminal you get a **live full-screen dashboard** (alternate
-screen buffer, like `top`) that redraws in place:
+screen buffer, like `top`) — bordered tables that redraw in place, with targets
+grouped under cyan `- <group>` label rows and losing rows in red:
 
 ```
-pingtrace live   2026-06-29 13:11:32 UTC   uptime 02:21:29   probes 76407   rtt ms   (Ctrl+C to stop)
-  target            loss(10)    win%  loss(total)    tot%      min     mean      max     last
-  home-router          0/10    0.0%   151/76407    0.20%      1.0      4.0     71.0      3.0
-  hk                   3/10   30.0%  1476/76407    1.93%    234.0    256.6    466.0    237.0  <- loss
-  cloudflare           0/10    0.0%  1129/76407    1.48%     52.0     58.3    152.0     60.0
+pingtrace live   2026-06-30 16:08:22 UTC   uptime 02:21:29   probes 76407   (rtt ms, Ctrl+C to stop)
+┌─────────────┬────────┬──────┬───────────┬──────┬───────┬───────┬───────┬───────┐
+│target       │loss(10)│win%  │total      │tot%  │min    │mean   │max    │last   │
+├─────────────┼────────┼──────┼───────────┼──────┼───────┼───────┼───────┼───────┤
+│─ root       │        │      │           │      │       │       │       │       │
+│home-router  │0/10    │0.0%  │151/76407  │0.20% │1.0    │4.0    │71.0   │3.0    │
+│─ trunk      │        │      │           │      │       │       │       │       │
+│trunk-h1-gw  │0/10    │0.0%  │92/76401   │0.12% │2.0    │5.5    │23.0   │7.0    │
+│─ icmp       │        │      │           │      │       │       │       │       │
+│cloudflare   │0/10    │0.0%  │1129/76407 │1.48% │52.0   │58.3   │152.0  │60.0   │
+│hk           │3/10    │30.0% │1476/76407 │1.93% │234.0  │256.6  │466.0  │237.0  │
+└─────────────┴────────┴──────┴───────────┴──────┴───────┴───────┴───────┴───────┘
 ```
+
+(the `hk` row is red; the `- root` / `- trunk` / `- icmp` label rows are cyan)
 
 - `loss(10)` / `win%` — failures over a **sliding window of the last 10 probes**
   per target (1‑10, then 2‑11, …) and that window's loss %.
-- `loss(total)` / `tot%` — totals since the process started.
+- `total` / `tot%` — totals since the process started.
 - `min / mean / max / last` — RTT (ms) over the same 10‑probe window. A failed
   last probe shows its status (`TIMEOUT`, `UNREACH`, …); no successful samples in
   the window → `-`.
-- Rows with loss in the window are shown in red and marked `<- loss`.
+- Rows with loss in the window are shown in red. (The piped/plain view has no
+  colour, so there it marks them `<- loss` instead.)
 
-Targets are stacked under cyan `- <group>` label rows (their `group`, else
-`path_group`). On a **wide terminal** (≥150 cols) the groups are split across
-**two bordered tables side by side** so the screen width is used and the list is
-half as tall; on a narrow terminal it falls back to one table. Set
-`PINGTRACE_COLS=<n>` to override the detected width (force one/two columns, or
-fix wrong detection when piped).
+Targets are stacked under cyan `- <group>` label rows (each target's `group`,
+else its `path_group`). The table **stretches to fill the terminal width**, and
+on a **wide terminal** (≥150 cols) the groups split across **two tables side by
+side** — each filling half — so the screen is used and the list is half as tall;
+a narrow terminal gets one full-width table. Set `PINGTRACE_COLS=<n>` to override
+the detected width (force one/two columns, or fix wrong detection when piped).
 
 The alt-buffer view survives mouse clicks and scrolling, and on `Ctrl+C` it
 restores your previous screen (all history is on disk). When stdout is **piped

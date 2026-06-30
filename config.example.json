@@ -14,7 +14,10 @@
     "trigger_traceroute": true
   },
   "targets": [
-    { "name": "cloudflare", "address": "1.1.1.1", "proto": "icmp" },
-    { "name": "google-dns", "address": "8.8.8.8", "proto": "icmp" }
+    { "name": "gateway",    "address": "192.168.0.1",  "proto": "icmp", "path_group": "*",   "hop_index": 0 },
+    { "name": "isp-hop1",   "address": "10.0.0.1",     "proto": "icmp", "path_group": "wan", "hop_index": 1 },
+    { "name": "cloudflare", "address": "1.1.1.1",      "proto": "icmp", "group": "icmp" },
+    { "name": "google-dns", "address": "8.8.8.8",      "proto": "icmp", "group": "icmp" },
+    { "name": "api",        "address": "api.bybit.com", "proto": "tcp", "port": 443, "group": "tcp" }
   ]
 }
